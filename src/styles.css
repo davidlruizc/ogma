@@ -3,6 +3,7 @@
 :root {
   --font-serif: Tinos, Georgia, "Times New Roman", serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  --font-brand: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
   --radius: 12px;
   --radius-sm: 8px;
   --sidebar-w: 212px;
@@ -169,13 +170,25 @@ a:hover {
 }
 
 .brand {
-  font: italic 700 30px var(--font-serif);
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 0 10px 18px;
-  letter-spacing: 0.3px;
 }
 
-.brand-dot {
-  color: var(--ac);
+.brand-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: block;
+  flex: none;
+  box-shadow: 0 2px 10px rgba(56, 182, 255, 0.3);
+}
+
+.brand-word {
+  font: 700 26px var(--font-brand);
+  letter-spacing: -0.03em;
+  color: var(--tx);
 }
 
 .nav {
