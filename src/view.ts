@@ -2,7 +2,8 @@ export type Route =
   | { name: "record" }
   | { name: "library" }
   | { name: "detail"; meetingId: string }
-  | { name: "settings" };
+  | { name: "settings" }
+  | { name: "spike" };
 
 export type Navigate = (route: Route) => void;
 
