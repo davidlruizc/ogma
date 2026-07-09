@@ -69,6 +69,11 @@ impl NotionClient {
                 "Name": {"title": {}},
                 "Date": {"date": {}},
                 "Duration (min)": {"number": {}},
+                "Attendees": {"multi_select": {}},
+                // A true Notion rollup needs a separate related database; the
+                // per-meeting action-item *count* as a number property gives the
+                // same at-a-glance/sortable signal without that extra structure.
+                "Action Items": {"number": {}},
                 "Status": {"select": {"options": [
                     {"name": "Done", "color": "green"},
                     {"name": "Processing", "color": "yellow"}
@@ -99,12 +104,19 @@ impl NotionClient {
             "toggle": {"rich_text": [text_rt("Full transcript")]}
         }));
 
+        let attendees: Vec<Value> = distinct_speakers(segments)
+            .into_iter()
+            .map(|name| json!({"name": name}))
+            .collect();
+
         let body = json!({
             "parent": {"database_id": self.database_id},
             "properties": {
                 "Name": {"title": [text_rt(&meeting.title)]},
                 "Date": {"date": {"start": meeting.created_at}},
                 "Duration (min)": {"number": meeting.duration_ms / 60_000},
+                "Attendees": {"multi_select": attendees},
+                "Action Items": {"number": notes.action_items.len()},
                 "Status": {"select": {"name": "Done"}}
             },
             "children": children
@@ -200,6 +212,24 @@ impl NotionClient {
         }
         Ok(())
     }
+}
+
+/// Distinct speaker labels in first-seen order, dropping the unlabeled
+/// sentinel. Notion multi_select option names can't contain commas, so those
+/// are swapped for spaces.
+fn distinct_speakers(segments: &[TranscriptSegment]) -> Vec<String> {
+    let mut seen = Vec::new();
+    for seg in segments {
+        if seg.speaker == crate::pipeline::UNLABELED_SPEAKER {
+            continue;
+        }
+        let name = seg.speaker.replace(',', " ");
+        let name = name.trim();
+        if !name.is_empty() && !seen.iter().any(|s: &String| s == name) {
+            seen.push(name.to_string());
+        }
+    }
+    seen
 }
 
 fn text_rt(content: &str) -> Value {
@@ -345,5 +375,25 @@ mod tests {
     fn format_ms_variants() {
         assert_eq!(format_ms(65_000), "1:05");
         assert_eq!(format_ms(3_725_000), "1:02:05");
+    }
+
+    #[test]
+    fn distinct_speakers_dedupes_and_drops_unlabeled() {
+        let seg = |speaker: &str| TranscriptSegment {
+            speaker: speaker.to_string(),
+            start_ms: 0,
+            end_ms: 0,
+            text: String::new(),
+        };
+        let segments = vec![
+            seg("Maria"),
+            seg(crate::pipeline::UNLABELED_SPEAKER),
+            seg("Tom, Jr."),
+            seg("Maria"),
+        ];
+        assert_eq!(
+            distinct_speakers(&segments),
+            vec!["Maria".to_string(), "Tom  Jr.".to_string()]
+        );
     }
 }
