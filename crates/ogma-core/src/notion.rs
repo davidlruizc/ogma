@@ -90,6 +90,25 @@ impl NotionClient {
             .ok_or_else(|| Error::Other("notion: database response missing id".into()))
     }
 
+    /// Backfill the properties each page sets onto a database created by an
+    /// older Ogma version that predates them. Notion's database update is
+    /// idempotent — it adds missing properties and leaves existing ones
+    /// untouched — so this is safe to call before every sync.
+    async fn ensure_schema(&self) -> Result<()> {
+        let body = json!({
+            "properties": {
+                "Attendees": {"multi_select": {}},
+                "Action Items": {"number": {}}
+            }
+        });
+        let path = format!("/databases/{}", self.database_id);
+        with_retries("notion ensure schema", || {
+            self.request(reqwest::Method::PATCH, &path, body.clone())
+        })
+        .await
+        .map(|_| ())
+    }
+
     /// Create the meeting page and append the transcript. Returns page id.
     pub async fn create_meeting_page(
         &self,
@@ -97,12 +116,26 @@ impl NotionClient {
         notes: &MeetingNotes,
         segments: &[TranscriptSegment],
     ) -> Result<String> {
-        let mut children = notes_blocks(notes);
-        children.push(json!({
-            "object": "block",
-            "type": "toggle",
-            "toggle": {"rich_text": [text_rt("Full transcript")]}
-        }));
+        // Ensure the newer Attendees/Action Items columns exist before we set
+        // them, so a database created by an older version doesn't 400 into the
+        // degraded fallback. Best-effort: if this fails the surgical fallback
+        // below still preserves the core properties and the full transcript.
+        if let Err(e) = self.ensure_schema().await {
+            tracing::warn!("notion ensure schema failed: {e}");
+        }
+
+        // Notes blocks plus the toggle that holds the full transcript. Rebuilt
+        // for the fallback body too (`json!` moves the Vec), so the transcript
+        // toggle is present on both the primary and the degraded page.
+        let transcript_children = || {
+            let mut children = notes_blocks(notes);
+            children.push(json!({
+                "object": "block",
+                "type": "toggle",
+                "toggle": {"rich_text": [text_rt("Full transcript")]}
+            }));
+            children
+        };
 
         let attendees: Vec<Value> = distinct_speakers(segments)
             .into_iter()
@@ -119,7 +152,7 @@ impl NotionClient {
                 "Action Items": {"number": notes.action_items.len()},
                 "Status": {"select": {"name": "Done"}}
             },
-            "children": children
+            "children": transcript_children()
         });
 
         let resp = match with_retries("notion create page", || {
@@ -129,15 +162,23 @@ impl NotionClient {
         {
             Ok(v) => v,
             Err(Error::Api { status: 400, .. }) => {
-                // Existing databases may not have our property names — retry
-                // with just the title so sync still succeeds.
-                let minimal = json!({
+                // A property we set is still missing on an older database (e.g.
+                // ensure_schema couldn't run). Retry without the newer
+                // Attendees/Action Items properties, but keep the core
+                // properties AND the transcript toggle so the full transcript is
+                // never silently dropped.
+                let fallback = json!({
                     "parent": {"database_id": self.database_id},
-                    "properties": {"Name": {"title": [text_rt(&meeting.title)]}},
-                    "children": notes_blocks(notes)
+                    "properties": {
+                        "Name": {"title": [text_rt(&meeting.title)]},
+                        "Date": {"date": {"start": meeting.created_at}},
+                        "Duration (min)": {"number": meeting.duration_ms / 60_000},
+                        "Status": {"select": {"name": "Done"}}
+                    },
+                    "children": transcript_children()
                 });
-                with_retries("notion create page (minimal)", || {
-                    self.request(reqwest::Method::POST, "/pages", minimal.clone())
+                with_retries("notion create page (fallback)", || {
+                    self.request(reqwest::Method::POST, "/pages", fallback.clone())
                 })
                 .await?
             }
