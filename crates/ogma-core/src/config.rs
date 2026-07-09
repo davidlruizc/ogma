@@ -43,10 +43,24 @@ impl Config {
         let raw = std::fs::read_to_string(&path)?;
         let cfg: Config = serde_json::from_str(&raw)
             .map_err(|e| Error::Config(format!("failed to parse {}: {e}", path.display())))?;
+        // A legacy config carries plaintext secrets directly in the JSON.
+        let has_plaintext_secret = !cfg.openai_api_key.is_empty()
+            || !cfg.anthropic_api_key.is_empty()
+            || !cfg.notion_api_key.is_empty();
         let mut cfg = Config::with_defaults(cfg);
-        // JSON wins if it still carries a plaintext key (legacy config); the
-        // next `save` migrates it into the keychain and blanks it on disk.
+        // JSON wins if it still carries a plaintext key (legacy config).
         secrets::hydrate(&mut cfg);
+        // Proactively migrate a legacy plaintext secret into the keychain rather
+        // than leaving it on disk until some incidental future `save`. Only when
+        // there is actually plaintext to move and a native keystore to move it
+        // into; best-effort — a keychain failure keeps the plaintext (save never
+        // drops keys), and once migrated the on-disk secrets are blank so this
+        // does not fire again.
+        if has_plaintext_secret && secrets::ENABLED {
+            if let Err(e) = cfg.save(data_dir) {
+                tracing::warn!("migrating legacy plaintext secrets to the keychain failed: {e}");
+            }
+        }
         Ok(cfg)
     }
 
@@ -54,8 +68,9 @@ impl Config {
         std::fs::create_dir_all(data_dir)?;
         let path = Self::config_path(data_dir);
         // Move secrets into the keychain; the on-disk copy has them blanked
-        // (or left in place if the keychain was unavailable).
-        let on_disk = secrets::externalize(self);
+        // (or left in place if the keychain was unavailable). A failed *removal*
+        // of a secret surfaces as an error rather than silently succeeding.
+        let on_disk = secrets::externalize(self)?;
         std::fs::write(&path, serde_json::to_string_pretty(&on_disk)?)?;
         Ok(())
     }
@@ -77,6 +92,11 @@ impl Config {
 #[cfg(any(windows, target_os = "macos"))]
 mod secrets {
     use super::Config;
+    use crate::error::{Error, Result};
+
+    /// This build has a native keystore, so `load` may proactively migrate
+    /// legacy plaintext secrets into it.
+    pub const ENABLED: bool = true;
 
     const SERVICE: &str = "com.davidruiz.ogma";
 
@@ -97,24 +117,34 @@ mod secrets {
         }
     }
 
-    /// Store or clear one secret. Returns true when the value is safely handled
-    /// by the keychain (so it can be blanked in `config.json`).
-    fn put(account: &str, value: &str) -> bool {
+    /// Store or clear one secret.
+    ///
+    /// * `Ok(true)`  — the value is safely in the keychain (or was removed), so
+    ///   it can be blanked in `config.json`.
+    /// * `Ok(false)` — a keychain *write* failed; the value is kept in
+    ///   `config.json` as a fallback so a key is never lost.
+    /// * `Err(_)`    — a keychain *removal* failed. We must NOT report the
+    ///   secret as gone: doing so blanks it on disk while it survives in the
+    ///   keychain, and the next `hydrate` would silently resurrect it. Surface
+    ///   the failure instead.
+    fn put(account: &str, value: &str) -> Result<bool> {
         let Some(entry) = entry(account) else {
-            return false;
+            // No keychain available: keep any non-empty value in config.json.
+            return Ok(value.is_empty());
         };
         if value.is_empty() {
             match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(e) => tracing::warn!("keychain delete {account} failed: {e}"),
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(true),
+                Err(e) => Err(Error::Config(format!(
+                    "failed to remove {account} from the keychain: {e}"
+                ))),
             }
-            true
         } else {
             match entry.set_password(value) {
-                Ok(()) => true,
+                Ok(()) => Ok(true),
                 Err(e) => {
                     tracing::warn!("keychain write {account} failed, keeping it in config.json: {e}");
-                    false
+                    Ok(false)
                 }
             }
         }
@@ -141,29 +171,91 @@ mod secrets {
     }
 
     /// Persist secrets to the keychain and return a copy with the stored ones
-    /// blanked — safe to write to `config.json`.
-    pub fn externalize(cfg: &Config) -> Config {
+    /// blanked — safe to write to `config.json`. Errors only if a secret could
+    /// not be *removed* (see `put`).
+    pub fn externalize(cfg: &Config) -> Result<Config> {
         let mut out = cfg.clone();
-        if put("openai_api_key", &cfg.openai_api_key) {
+        if put("openai_api_key", &cfg.openai_api_key)? {
             out.openai_api_key.clear();
         }
-        if put("anthropic_api_key", &cfg.anthropic_api_key) {
+        if put("anthropic_api_key", &cfg.anthropic_api_key)? {
             out.anthropic_api_key.clear();
         }
-        if put("notion_api_key", &cfg.notion_api_key) {
+        if put("notion_api_key", &cfg.notion_api_key)? {
             out.notion_api_key.clear();
         }
-        out
+        Ok(out)
     }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod secrets {
     use super::Config;
+    use crate::error::Result;
+
+    /// No native keystore on this target, so there is nothing to migrate into.
+    pub const ENABLED: bool = false;
 
     pub fn hydrate(_cfg: &mut Config) {}
 
-    pub fn externalize(cfg: &Config) -> Config {
-        cfg.clone()
+    pub fn externalize(cfg: &Config) -> Result<Config> {
+        Ok(cfg.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_secrets(openai: &str, anthropic: &str, notion: &str) -> Config {
+        Config {
+            openai_api_key: openai.to_string(),
+            anthropic_api_key: anthropic.to_string(),
+            notion_api_key: notion.to_string(),
+            ..Config::default()
+        }
+    }
+
+    /// Precedence: a non-empty (legacy plaintext) secret must never be
+    /// overwritten by `hydrate`. Because the field is non-empty, `hydrate` must
+    /// not consult the keychain at all — so this holds on every platform without
+    /// touching any keystore.
+    #[test]
+    fn hydrate_keeps_existing_plaintext_secret() {
+        let mut cfg = cfg_with_secrets("plaintext-openai", "plaintext-anthropic", "plaintext-notion");
+        secrets::hydrate(&mut cfg);
+        assert_eq!(cfg.openai_api_key, "plaintext-openai");
+        assert_eq!(cfg.anthropic_api_key, "plaintext-anthropic");
+        assert_eq!(cfg.notion_api_key, "plaintext-notion");
+    }
+
+    /// On a target with no native keystore, secrets stay in `config.json` and
+    /// `hydrate` is a no-op, so keys are never lost. This is the module compiled
+    /// on a Linux CI runner.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    #[test]
+    fn fallback_keeps_secrets_in_config() {
+        assert!(!secrets::ENABLED);
+        let cfg = cfg_with_secrets("sk-o", "sk-a", "sk-n");
+        let on_disk = secrets::externalize(&cfg).unwrap();
+        assert_eq!(on_disk.openai_api_key, "sk-o");
+        assert_eq!(on_disk.anthropic_api_key, "sk-a");
+        assert_eq!(on_disk.notion_api_key, "sk-n");
+    }
+
+    /// With a native keystore, `externalize` stores the secrets and blanks the
+    /// on-disk copy. Uses keyring's in-memory mock so the real OS keychain is
+    /// never touched (the mock keeps no cross-entry state, so we assert the
+    /// blanking of the returned on-disk config rather than a get round-trip).
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn externalize_blanks_stored_secrets() {
+        assert!(secrets::ENABLED);
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let cfg = cfg_with_secrets("sk-openai", "sk-anthropic", "sk-notion");
+        let on_disk = secrets::externalize(&cfg).unwrap();
+        assert!(on_disk.openai_api_key.is_empty());
+        assert!(on_disk.anthropic_api_key.is_empty());
+        assert!(on_disk.notion_api_key.is_empty());
     }
 }
