@@ -1,0 +1,54 @@
+---
+title: Getting started
+description: Build Ogma from source and record your first meeting.
+---
+
+Ogma is in alpha and does not ship installers yet — you build it from source. It currently supports **Windows**; macOS and iOS are planned.
+
+## Prerequisites
+
+- **Rust** (stable) — [rustup.rs](https://rustup.rs)
+- **Node.js** (LTS)
+- The [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your platform (on Windows: WebView2, which ships with Windows 11, and the MSVC build tools)
+- A microphone
+
+## Build and run
+
+```sh
+git clone https://github.com/davidlruizc/ogma.git
+cd ogma
+npm install
+npm run tauri dev
+```
+
+`npm run tauri dev` starts the Vite dev server and compiles the Rust backend; the first build takes a few minutes.
+
+For a release build:
+
+```sh
+npm run tauri build
+```
+
+## First launch checklist
+
+1. Open **Settings** and paste your API keys — see [Configuration](/docs/configuration). You need:
+   - an **OpenAI** key (Whisper transcription)
+   - an **Anthropic** key (speaker labels + notes)
+   - optionally a **Notion** integration token (sync)
+2. Pick your microphone if you don't want the system default.
+3. Hit record and say a few sentences with a colleague — a short 2-person conversation is the best smoke test.
+4. Stop the recording and watch the pipeline run: transcribe → label & summarize → (optionally) sync to Notion.
+
+<Callout title="Keys are required for processing, not recording">
+  You can record without any API keys — audio is saved locally regardless.
+  Transcription and notes run once keys are configured, and a failed or skipped
+  step can always be retried later.
+</Callout>
+
+## Where your data lives
+
+Everything local is stored in the app data directory (on Windows: `%APPDATA%\com.davidruiz.ogma`):
+
+- **Audio** — WAV files per meeting, kept until the meeting is fully processed (and after — source audio is treated as sacred)
+- **Database** — a SQLite file holding meetings, transcripts (full-text indexed), notes, and action items
+- **Config** — `config.json`; API keys are stored in the OS keychain, not on disk (see [Configuration](/docs/configuration))

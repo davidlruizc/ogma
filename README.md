@@ -58,5 +58,6 @@ Tools: `list_meetings`, `search_transcript` (FTS5), `get_meeting_notes`, `get_tr
 
 ## Documents
 
+- [website/](website/) — public documentation site (Fumadocs); `cd website && npm install && npm run dev`
 - [PLAN.md](PLAN.md) — full architecture, decisions, phase plan, and verification checklist
 - [CLAUDE.md](CLAUDE.md) — working conventions for AI-assisted development

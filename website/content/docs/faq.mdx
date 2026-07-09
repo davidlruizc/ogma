@@ -1,0 +1,44 @@
+---
+title: FAQ
+description: Costs, privacy, platforms, and troubleshooting.
+---
+
+## How much does processing cost?
+
+Roughly **$1.25 per 3-hour meeting**, dominated by Whisper transcription (billed per audio minute) with a small Claude cost for notes. Shorter meetings cost proportionally less. You pay OpenAI and Anthropic directly through your own API keys — Ogma itself has no fees.
+
+## Where does my audio go?
+
+- **Recording** stays on your machine, always.
+- **Processing** sends audio to the OpenAI Whisper API and the resulting transcript text to the Anthropic API, under your own accounts and their respective API data-usage policies.
+- **Sync** (optional) sends the notes and transcript to your Notion workspace.
+
+If you configure no keys, nothing leaves your machine — you just get raw recordings.
+
+## Why cloud APIs instead of local AI?
+
+A deliberate v1 choice: cloud processing behaves identically on a desktop and (eventually) a phone, needs no multi-gigabyte model downloads, and delivers better transcription quality today. The providers sit behind internal interfaces so a local backend can slot in later.
+
+## Which platforms are supported?
+
+Windows today. macOS is next, then iOS — the mobile version depends on validating reliable background recording under Tauri 2.
+
+## Ogma crashed during a meeting — did I lose it?
+
+At most about 5 minutes. Audio is written to disk continuously in 5-minute segments; relaunch the app and it recovers the interrupted recording automatically. See [Recording meetings](/docs/recording).
+
+## Transcription or notes failed — what do I do?
+
+Open the meeting and hit retry. Every pipeline step is idempotent: completed stages are never redone or re-billed, and the pipeline resumes from whatever is missing. Common causes are an invalid/underfunded API key or a network drop.
+
+## Can I use a different Claude or Whisper model?
+
+Yes — both model names are configurable in Settings (defaults: `whisper-1` and `claude-sonnet-5`).
+
+## Are my API keys safe?
+
+They're stored in the OS keychain (Windows Credential Manager / macOS Keychain), not in a plaintext file, whenever a native keystore is available. See [Configuration](/docs/configuration).
+
+## My meetings are not in English — will it work?
+
+Yes. Whisper auto-detects language, and you can set an explicit language hint in Settings for better accuracy. Notes come out in the language Claude sees in the transcript.

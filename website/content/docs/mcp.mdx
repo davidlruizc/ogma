@@ -1,0 +1,40 @@
+---
+title: MCP server
+description: Let Claude and other AI clients search your meeting library.
+---
+
+The Ogma binary doubles as a local [MCP](https://modelcontextprotocol.io) server: run it with `--mcp` and it speaks JSON-RPC over stdio, reading your local meeting library. Nothing is uploaded anywhere — the AI client queries your machine.
+
+## Register with Claude Code
+
+```sh
+claude mcp add ogma -- "C:\path\to\ogma.exe" --mcp
+```
+
+(If you built from source, the binary is at `target\release\ogma.exe`, or `target\debug\ogma.exe` after a dev build.)
+
+For other MCP clients, configure a stdio server with the command `ogma.exe --mcp`.
+
+## Available tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_meetings` | List recorded meetings (id, title, date, duration, status), newest first. Optional title filter. |
+| `search_transcript` | Full-text search across all meeting transcripts. Returns matching utterances with meeting id/title, speaker, and timestamp. |
+| `get_meeting_notes` | The AI-generated notes for a meeting: TL;DR, summary, key points, decisions, action items, open questions, highlights. |
+| `get_transcript` | The full speaker-labeled transcript of a meeting. |
+| `get_action_items` | Action items across all meetings, optionally filtered by status (`open` or `done`). |
+
+## Example prompts
+
+Once registered, ask your AI client things like:
+
+- *"What did we decide about the launch date in last week's product sync?"*
+- *"List my open action items across all meetings."*
+- *"Search my meetings for every mention of the pricing experiment."*
+
+## Notes
+
+- The MCP server reads the same local SQLite database as the app — it reflects whatever has been recorded and processed on this machine.
+- It's read-only: MCP tools never modify meetings or write to Notion.
+- The app doesn't need to be running; the `--mcp` process is self-contained.
