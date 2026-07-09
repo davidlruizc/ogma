@@ -1,0 +1,37 @@
+---
+title: What is Ogma?
+description: A desktop app that records meetings, transcribes them, writes AI notes, and syncs everything to Notion.
+---
+
+Ogma is a desktop app for recording **in-person meetings** (1–3 hours) and turning them into searchable, structured knowledge. It is named after the Celtic god of eloquence and inventor of the Ogham script: he listened well and wrote things down.
+
+## What it does
+
+1. **Record** a meeting from your microphone. Audio is written as rotating 5-minute segments, so a crash loses minutes, not the meeting.
+2. **Transcribe** via the OpenAI Whisper API, stitched into one timestamped transcript.
+3. **Label & summarize** via the Claude API: speaker attribution (`Speaker A/B/C`, renameable to real names) plus structured notes — TL;DR, summary, key points, decisions, action items, open questions, and quote highlights that jump-play the audio.
+4. **Sync** the finished notes and transcript to a Notion "Meetings" database — the canonical, cross-device store.
+5. **Ask Claude about it**: the same binary runs as a local [MCP server](/docs/mcp) so Claude Code and other AI clients can search your transcripts and pull action items.
+
+## How it works
+
+```
+Record → 5-min WAV segments → Whisper (per segment) → stitched transcript
+       → Claude (speaker labels + notes)
+       → SQLite (local library) → Notion (canonical store)
+```
+
+Processing is cloud-based by design (roughly **$1.25 per 3-hour meeting** in API costs) — it keeps the app identical across devices and avoids shipping local models. See the [FAQ](/docs/faq) for the cost and privacy details.
+
+## Status
+
+Ogma is in **alpha**. It currently runs on Windows; macOS and iOS are planned.
+
+## Next steps
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started" description="Build and run Ogma on your machine." />
+  <Card title="Configuration" href="/docs/configuration" description="API keys, models, and microphone selection." />
+  <Card title="Recording meetings" href="/docs/recording" description="Start, pause, resume — and what happens on a crash." />
+  <Card title="MCP server" href="/docs/mcp" description="Query your meeting library from Claude." />
+</Cards>

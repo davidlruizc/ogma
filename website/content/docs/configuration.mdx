@@ -1,0 +1,43 @@
+---
+title: Configuration
+description: API keys, model choices, language hint, and microphone selection.
+---
+
+Everything is configured from the **Settings** view inside the app. Nothing is hardcoded, and no key ever needs to be committed anywhere.
+
+## API keys
+
+Ogma talks to three services, each with its own key:
+
+| Key | Used for | Where to get it |
+| --- | --- | --- |
+| **OpenAI** | Whisper transcription | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Anthropic** | Speaker labels + meeting notes (Claude) | [console.anthropic.com](https://console.anthropic.com/) |
+| **Notion** (optional) | Syncing meetings to your workspace | [notion.so/my-integrations](https://www.notion.so/my-integrations) — create an internal integration |
+
+Leave the Notion fields empty to skip Notion sync entirely; everything else still works.
+
+### How keys are stored
+
+On save, keys are written to the **OS keychain** (Windows Credential Manager, macOS Keychain) and blanked in the on-disk `config.json`. If no native keystore is available, or a keychain write fails, Ogma falls back to keeping the key in `config.json` rather than losing it — so a key you saved is never silently dropped.
+
+## Models
+
+Two model settings are exposed:
+
+- **Whisper model** — defaults to `whisper-1`
+- **Notes model** — the Claude model used for speaker attribution and notes, defaults to `claude-sonnet-5`
+
+You normally don't need to touch these; they exist so you can adopt newer models without waiting for an app update.
+
+## Language hint
+
+Whisper auto-detects the spoken language by default. If your meetings are consistently in one language, set the **language** field to an ISO code (e.g. `en`, `es`) — it improves accuracy and avoids misdetection on noisy openings.
+
+## Microphone
+
+Ogma records from the system default input device unless you pick a specific one under **Input device**. Choose the physical mic closest to the room conversation — a laptop mic in the middle of a table generally beats a headset for multi-speaker capture.
+
+## Notion connection
+
+See [Notion sync](/docs/notion) for connecting an integration and creating or linking a Meetings database.

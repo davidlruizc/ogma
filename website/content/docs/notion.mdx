@@ -1,0 +1,36 @@
+---
+title: Notion sync
+description: Make Notion the canonical, cross-device home of your meeting notes.
+---
+
+Notion is Ogma's **canonical store**: the local app is the recorder and processing engine, but the finished notes and transcripts live in a Notion "Meetings" database you can read anywhere. Sync is optional — leave the Notion settings empty to keep everything local.
+
+## Connect your workspace
+
+1. Create an **internal integration** at [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy its token.
+2. Paste the token into **Settings → Notion token** in Ogma.
+3. In Notion, **share a page with your integration** (page ••• menu → Connections → your integration). This is the page Ogma can create the database under.
+
+## Create or link the Meetings database
+
+Two options in Settings:
+
+- **Create** — paste the URL of the page you shared with the integration and click *Create database*. Ogma creates a Meetings database inside it with the right schema and links it automatically.
+- **Link existing** — paste the ID (or URL) of an existing Meetings database into the *Notion database ID* field. Ogma accepts a full Notion URL and extracts the ID for you.
+
+## What gets synced
+
+For each processed meeting, Ogma creates a page in the database containing:
+
+- title, date, and duration
+- the structured notes — TL;DR, summary, key points, decisions, action items, open questions
+- attendees (the renamed speakers)
+- the full speaker-labeled transcript
+
+Sync happens automatically at the end of the [pipeline](/docs/transcripts-and-notes), and can be retried from the meeting detail view if it fails.
+
+<Callout title="One-way sync">
+  Ogma pushes to Notion; it doesn't pull edits back. Treat the Notion page as
+  the place to annotate and share, and the app as the place to record and
+  reprocess.
+</Callout>

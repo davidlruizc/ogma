@@ -1,0 +1,13 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "getting-started",
+    "configuration",
+    "recording",
+    "transcripts-and-notes",
+    "notion",
+    "mcp",
+    "faq"
+  ]
+}

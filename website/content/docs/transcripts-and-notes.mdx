@@ -1,0 +1,46 @@
+---
+title: Transcripts & notes
+description: How the processing pipeline turns raw audio into a speaker-labeled transcript and structured notes.
+---
+
+When you stop a recording, Ogma runs a pipeline with three stages. Each stage is **idempotent and retryable** — if anything fails (network, API outage, closing the laptop), you can retry from the meeting's detail view and it picks up exactly where it left off.
+
+## 1. Transcription (Whisper)
+
+Each 5-minute audio segment is sent to the OpenAI Whisper API and the results are stitched back together with corrected timestamps, producing one continuous, timestamped transcript.
+
+## 2. Speaker labels & notes (Claude)
+
+The full transcript is sent to the Claude API in a single call that returns two things:
+
+- **Speaker attribution** — utterances get labeled `Speaker A`, `Speaker B`, `Speaker C`, … inferred from the conversation text itself (who answers whom, names used, speaking style).
+- **Structured notes** — TL;DR, summary, key points, decisions, action items, open questions, and quote **highlights** that jump-play the corresponding audio in the app.
+
+<Callout title="Speaker labels are best-effort">
+  Ogma does not do acoustic diarization (voice fingerprinting). Labels are
+  inferred from the text, which works well for structured 2–4 person meetings
+  and degrades with heavy crosstalk. Utterances the model can't confidently
+  attribute are labeled <code>Speaker ?</code>.
+</Callout>
+
+### Renaming speakers
+
+In the meeting detail view you can rename `Speaker A` → `Alice` etc. Renames apply across the whole transcript and carry into Notion on the next sync.
+
+## 3. Notion sync
+
+If a Notion database is connected, the finished meeting is pushed there — see [Notion sync](/docs/notion).
+
+## Retrying and resuming
+
+The pipeline derives its resume point from what's already stored:
+
+- no transcript yet → transcription runs
+- transcript but no notes → the Claude step runs
+- notes but no Notion page → only the sync runs
+
+So a retry after a failure never redoes (or re-bills) completed work.
+
+## Search
+
+Every transcript is indexed with full-text search locally. You can search across all meetings from the app — and AI clients can do the same through the [MCP server](/docs/mcp).
