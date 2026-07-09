@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS entitlements for signed/hardened-runtime builds. Without the audio-input
+  entitlement, a hardened-runtime-signed app is denied the microphone even when
+  NSMicrophoneUsageDescription is present. Unsigned `tauri dev` builds don't need
+  this, but distribution builds do.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
