@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS-only Info.plist additions. Tauri v2 merges this file into the generated
+  bundle Info.plist for macOS builds. NSMicrophoneUsageDescription is required
+  or the OS denies mic access outright (the TCC prompt never appears).
+-->
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Ogma records your in-person meetings so it can transcribe them and generate notes. Audio is captured only while you are recording.</string>
+</dict>
+</plist>
