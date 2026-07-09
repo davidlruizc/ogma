@@ -4,6 +4,7 @@ import { renderDetail } from "./views/detail";
 import { renderLibrary } from "./views/library";
 import { renderRecord } from "./views/record";
 import { renderSettings } from "./views/settings";
+import { renderSpike } from "./views/spike";
 import { progressByMeeting } from "./store";
 import type { LevelUpdate, ProgressEvent } from "./types";
 import type { Route, View } from "./view";
@@ -25,7 +26,9 @@ function navigate(route: Route): void {
         ? renderSettings(navigate)
         : route.name === "library"
           ? renderLibrary(navigate)
-          : renderRecord(navigate);
+          : route.name === "spike"
+            ? renderSpike()
+            : renderRecord(navigate);
   current = view;
   app.replaceChildren(view.el);
   app.scrollTop = 0;
@@ -43,6 +46,7 @@ document.getElementById("nav")?.addEventListener("click", (e) => {
   if (key === "record") navigate({ name: "record" });
   else if (key === "library") navigate({ name: "library" });
   else if (key === "settings") navigate({ name: "settings" });
+  else if (key === "spike") navigate({ name: "spike" });
 });
 
 // ── theme toggle (persisted) ────────────────────────────────────────────────
