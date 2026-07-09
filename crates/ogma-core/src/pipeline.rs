@@ -17,7 +17,7 @@ use crate::notion::NotionClient;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::whisper::WhisperProvider;
 use crate::providers::{AudioChunk, NotesProvider, TranscriptionProvider, Utterance};
-use crate::recording::{self, SEGMENT_SECONDS};
+use crate::recording::{self, wav};
 use crate::storage::Storage;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -111,14 +111,11 @@ impl Pipeline {
         if segments.is_empty() {
             return Err(Error::InvalidState("no audio segments on disk".into()));
         }
-        let chunks: Vec<AudioChunk> = segments
-            .iter()
-            .enumerate()
-            .map(|(i, path)| AudioChunk {
-                path: path.clone(),
-                offset_ms: (i as i64) * (SEGMENT_SECONDS as i64) * 1000,
-            })
-            .collect();
+        // Offset each chunk by the *actual* summed duration of the segments
+        // before it, not a nominal 5-min-per-segment count: a recovered/repaired
+        // crash can leave a short segment, and using its real length keeps every
+        // downstream timestamp aligned.
+        let chunks = chunk_offsets(&segments)?;
 
         let provider = WhisperProvider::new(
             self.config.openai_api_key.clone(),
@@ -234,8 +231,49 @@ impl Pipeline {
 
 pub const UNLABELED_SPEAKER: &str = "Speaker ?";
 
+/// Pair each segment with the running sum of the real durations of the segments
+/// before it, so Whisper's per-chunk timestamps stitch into one timeline even
+/// when a segment is shorter than the nominal 5 minutes.
+fn chunk_offsets(segments: &[std::path::PathBuf]) -> Result<Vec<AudioChunk>> {
+    let mut chunks = Vec::with_capacity(segments.len());
+    let mut offset_ms = 0i64;
+    for path in segments {
+        chunks.push(AudioChunk {
+            path: path.clone(),
+            offset_ms,
+        });
+        offset_ms += wav::duration_ms(path)?;
+    }
+    Ok(chunks)
+}
+
 fn has_labeled_transcript(storage: &Arc<Mutex<Storage>>, meeting_id: &str) -> Result<bool> {
     let storage = storage.lock().unwrap();
     let segments = storage.get_segments(meeting_id)?;
     Ok(!segments.is_empty() && segments.iter().any(|s| s.speaker != UNLABELED_SPEAKER))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recording::wav::WavWriter;
+
+    #[test]
+    fn chunk_offsets_accumulate_actual_durations() {
+        let dir = tempfile::tempdir().unwrap();
+        // seg 0: 1s (16000 samples), seg 1: a short 0.5s segment, seg 2: 1s.
+        let lengths = [16_000usize, 8_000, 16_000];
+        let mut paths = Vec::new();
+        for (i, &n) in lengths.iter().enumerate() {
+            let p = dir.path().join(format!("seg-{i:03}.wav"));
+            let mut w = WavWriter::create(&p).unwrap();
+            w.write_samples(&vec![0i16; n]).unwrap();
+            w.finalize().unwrap();
+            paths.push(p);
+        }
+        let chunks = chunk_offsets(&paths).unwrap();
+        let offsets: Vec<i64> = chunks.iter().map(|c| c.offset_ms).collect();
+        // 0, then 1000ms after seg0, then 1500ms after the short seg1.
+        assert_eq!(offsets, vec![0, 1000, 1500]);
+    }
 }
