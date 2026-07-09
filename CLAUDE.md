@@ -52,12 +52,13 @@ Phases 1–3 implemented (Windows desktop): recording core, SQLite storage, Whis
 Rust workspace:
   ogma (Tauri app)  ──uses──►  core (lib crate: pipeline, storage, providers)
                                  └── also used by the --mcp stdio mode
-Pipeline: finalize audio → transcode chunks (<25MB) → Whisper per chunk →
-          stitch timestamps → Claude (speakers + notes JSON) → SQLite → Notion
+Pipeline: finalize audio → raw 5-min WAV chunks (already <25MB, no transcode) →
+          Whisper per chunk → stitch timestamps → Claude (speakers + notes JSON)
+          → SQLite → Notion
 Frontend: Vite + vanilla TypeScript (no framework unless UI outgrows it)
 ```
 
-Key crates: `cpal`, `hound`, `rusqlite` (+FTS5), `reqwest`, `rmcp`, `tokio`, `serde_json`. Audio transcode via ffmpeg bundled as a Tauri sidecar.
+Key crates: `cpal`, `rusqlite` (+FTS5), `reqwest`, `rmcp`, `keyring`, `tokio`, `serde_json`. WAV read/write is hand-rolled (`recording/wav.rs`) for crash-safe header repair — no `hound`. No ffmpeg: raw 16kHz mono WAV chunks are already under the 25MB Whisper cap.
 
 ## Conventions & constraints
 
