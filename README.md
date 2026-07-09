@@ -17,7 +17,7 @@ Cloud processing (~$1.25 per 3-hour meeting) is a deliberate choice: it makes th
 ## Stack
 
 - **App:** [Tauri 2](https://tauri.app) — Rust backend, Vite + TypeScript frontend
-- **Audio:** `cpal` capture → 16kHz mono WAV segments → ffmpeg sidecar for compression
+- **Audio:** `cpal` capture → crash-safe 16kHz mono WAV segments (already under Whisper's 25MB cap, so no transcode step)
 - **AI:** OpenAI Whisper (`whisper-1`) for STT, Claude (`claude-sonnet-5`) for speaker labels + notes
 - **Storage:** SQLite (`rusqlite` + FTS5) locally, Notion REST API as the shared store
 - **MCP:** `rmcp` crate, stdio transport
