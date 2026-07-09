@@ -2,31 +2,62 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Tinos:ital,wght@0,400;0,700;1,400;1,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ogma</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
-  <body>
-    <header class="app-header">
-      <button id="nav-home" class="brand" title="Home">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor" />
-          <path d="M5 11a7 7 0 0 0 14 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none" />
-          <line x1="12" y1="18" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-        </svg>
-        <span>Ogma</span>
-      </button>
-      <button id="nav-settings" class="icon-btn" title="Settings" aria-label="Settings">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm7.4-3.5c0-.5-.05-1-.14-1.47l2.11-1.65-2-3.46-2.49 1a7.6 7.6 0 0 0-2.54-1.47L14 2h-4l-.34 2.95c-.92.33-1.78.83-2.54 1.47l-2.49-1-2 3.46 2.11 1.65c-.09.48-.14.97-.14 1.47s.05 1 .14 1.47l-2.11 1.65 2 3.46 2.49-1c.76.64 1.62 1.14 2.54 1.47L10 22h4l.34-2.95a7.6 7.6 0 0 0 2.54-1.47l2.49 1 2-3.46-2.11-1.65c.09-.48.14-.97.14-1.47Z"
-            stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-        </svg>
-      </button>
-    </header>
-    <main id="app"></main>
+  <body data-theme="dark">
+    <div class="titlebar">
+      <span class="titlebar-label">OGMA — MEETING RECORDER</span>
+      <span class="flex-spacer"></span>
+      <button id="theme-toggle" class="theme-toggle" title="Toggle theme">◑ DARK</button>
+    </div>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">ogma<span class="brand-dot">.</span></div>
+
+        <nav class="nav" id="nav">
+          <button class="nav-item" data-nav="record">
+            <span class="nav-label">Record</span>
+            <span class="flex-spacer"></span>
+            <span class="nav-badge" data-badge="record"></span>
+          </button>
+          <button class="nav-item" data-nav="library">
+            <span class="nav-label">Library</span>
+            <span class="flex-spacer"></span>
+            <span class="nav-badge" data-badge="library"></span>
+          </button>
+          <button class="nav-item" data-nav="settings">
+            <span class="nav-label">Settings</span>
+            <span class="flex-spacer"></span>
+            <span class="nav-badge" data-badge="settings"></span>
+          </button>
+        </nav>
+
+        <span class="flex-spacer"></span>
+
+        <div class="sidebar-status">
+          <div class="status-line">
+            <span class="status-dot ok"></span>MCP server · stdio
+          </div>
+          <div class="status-line" id="notion-status">
+            <span class="status-dot muted"></span>Notion · not connected
+          </div>
+        </div>
+      </aside>
+
+      <main id="app"></main>
+    </div>
+
     <div id="toasts" aria-live="polite"></div>
   </body>
 </html>

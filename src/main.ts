@@ -1,6 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
+import { api } from "./api";
 import { renderDetail } from "./views/detail";
-import { renderHome } from "./views/home";
+import { renderLibrary } from "./views/library";
+import { renderRecord } from "./views/record";
 import { renderSettings } from "./views/settings";
 import { progressByMeeting } from "./store";
 import type { LevelUpdate, ProgressEvent } from "./types";
@@ -9,6 +11,11 @@ import type { Route, View } from "./view";
 const app = document.getElementById("app")!;
 let current: View | null = null;
 
+/** Which sidebar tab lights up for a given route. */
+function navKey(route: Route): string {
+  return route.name === "detail" ? "library" : route.name;
+}
+
 function navigate(route: Route): void {
   current?.destroy?.();
   const view: View =
@@ -16,16 +23,77 @@ function navigate(route: Route): void {
       ? renderDetail(navigate, route.meetingId)
       : route.name === "settings"
         ? renderSettings(navigate)
-        : renderHome(navigate);
+        : route.name === "library"
+          ? renderLibrary(navigate)
+          : renderRecord(navigate);
   current = view;
   app.replaceChildren(view.el);
   app.scrollTop = 0;
-  document.documentElement.scrollTop = 0;
+
+  const active = navKey(route);
+  for (const btn of document.querySelectorAll<HTMLElement>(".nav-item")) {
+    btn.classList.toggle("active", btn.dataset.nav === active);
+  }
 }
 
-// Header nav
-document.getElementById("nav-home")?.addEventListener("click", () => navigate({ name: "home" }));
-document.getElementById("nav-settings")?.addEventListener("click", () => navigate({ name: "settings" }));
+// ── sidebar nav ─────────────────────────────────────────────────────────────
+document.getElementById("nav")?.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLElement>(".nav-item");
+  const key = btn?.dataset.nav;
+  if (key === "record") navigate({ name: "record" });
+  else if (key === "library") navigate({ name: "library" });
+  else if (key === "settings") navigate({ name: "settings" });
+});
+
+// ── theme toggle (persisted) ────────────────────────────────────────────────
+const themeBtn = document.getElementById("theme-toggle")!;
+function applyTheme(theme: "dark" | "light"): void {
+  document.body.dataset.theme = theme;
+  themeBtn.textContent = theme === "dark" ? "◑ DARK" : "◐ LIGHT";
+  localStorage.setItem("ogma-theme", theme);
+}
+themeBtn.addEventListener("click", () => {
+  applyTheme(document.body.dataset.theme === "dark" ? "light" : "dark");
+});
+applyTheme(localStorage.getItem("ogma-theme") === "light" ? "light" : "dark");
+
+// ── sidebar badges + Notion status ──────────────────────────────────────────
+function setBadge(key: string, text: string, rec = false): void {
+  const el = document.querySelector<HTMLElement>(`.nav-badge[data-badge="${key}"]`);
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("rec", rec);
+}
+
+async function refreshBadges(): Promise<void> {
+  try {
+    const meetings = await api.listMeetings();
+    setBadge("library", String(meetings.length));
+  } catch {
+    /* backend not ready */
+  }
+  try {
+    const state = await api.recordingState();
+    setBadge("record", state.meeting_id ? "REC" : "", state.meeting_id !== null);
+  } catch {
+    /* backend not ready */
+  }
+}
+
+async function refreshNotionStatus(): Promise<void> {
+  const line = document.getElementById("notion-status");
+  if (!line) return;
+  try {
+    const config = await api.getSettings();
+    const connected = config.notion_api_key.trim() !== "" && config.notion_database_id.trim() !== "";
+    line.innerHTML = "";
+    const dot = document.createElement("span");
+    dot.className = `status-dot ${connected ? "ok" : "muted"}`;
+    line.append(dot, connected ? "Notion · connected" : "Notion · not connected");
+  } catch {
+    /* leave default */
+  }
+}
 
 // Bridge Tauri events onto window CustomEvents so views can subscribe with
 // plain DOM listeners (and clean up synchronously on teardown).
@@ -40,4 +108,12 @@ void listen("meetings:changed", () => {
   window.dispatchEvent(new CustomEvent("ogma:changed"));
 });
 
-navigate({ name: "home" });
+window.addEventListener("ogma:changed", () => void refreshBadges());
+window.addEventListener("ogma:progress", () => void refreshBadges());
+window.addEventListener("ogma:settings-saved", () => void refreshNotionStatus());
+window.setInterval(() => void refreshBadges(), 2500);
+
+void refreshBadges();
+void refreshNotionStatus();
+
+navigate({ name: "record" });

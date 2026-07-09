@@ -1,5 +1,6 @@
 export type Route =
-  | { name: "home" }
+  | { name: "record" }
+  | { name: "library" }
   | { name: "detail"; meetingId: string }
   | { name: "settings" };
 
