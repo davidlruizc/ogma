@@ -1,5 +1,8 @@
 //! Tauri app layer: commands + events over ogma-core.
 
+#[cfg(desktop)]
+mod tray;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -119,7 +122,14 @@ fn set_action_item_status(state: State<AppState>, id: i64, status: String) -> Cm
 // ── recording ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>) -> CmdResult<Meeting> {
+fn start_recording(app: AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    do_start_recording(&app, title)
+}
+
+/// Shared by the `start_recording` command, the tray menu and the global
+/// shortcut, so recording can begin without the window being open.
+fn do_start_recording(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    let state = app.state::<AppState>();
     let mut active = state.recording.lock().unwrap();
     if active.is_some() {
         return Err("a recording is already in progress".into());
@@ -163,6 +173,7 @@ fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>
         meeting_id: id,
     });
     let _ = app.emit("meetings:changed", ());
+    update_tray(app, true);
     Ok(meeting)
 }
 
@@ -213,11 +224,19 @@ fn recording_state(state: State<AppState>) -> CmdResult<RecordingState> {
 }
 
 #[tauri::command]
-async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> CmdResult<String> {
+async fn stop_recording(app: AppHandle) -> CmdResult<String> {
+    do_stop_recording(app).await
+}
+
+/// Shared by the `stop_recording` command, the tray menu, the global shortcut
+/// and Quit — finalizes the audio and kicks off the pipeline.
+async fn do_stop_recording(app: AppHandle) -> CmdResult<String> {
+    let state = app.state::<AppState>();
     let session = {
         let mut active = state.recording.lock().unwrap();
         active.take().ok_or("no active recording")?
     };
+    update_tray(&app, false);
     let meeting_id = session.meeting_id.clone();
 
     // Recorder::stop joins audio threads — run it off the async runtime.
@@ -249,7 +268,7 @@ async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> CmdResult
     }
 
     let _ = app.emit("meetings:changed", ());
-    spawn_pipeline(app, &state, meeting_id.clone());
+    spawn_pipeline(&app, meeting_id.clone());
     Ok(meeting_id)
 }
 
@@ -269,12 +288,81 @@ async fn discard_recording(app: AppHandle, state: State<'_, AppState>) -> CmdRes
     };
     let _ = std::fs::remove_dir_all(audio_dir);
     let _ = app.emit("meetings:changed", ());
+    update_tray(&app, false);
     Ok(())
+}
+
+// ── tray & global shortcut ──────────────────────────────────────────────────
+
+/// Start if idle, stop if recording — the tray/global-shortcut entry point.
+/// Errors are logged, not surfaced: there may be no window to show them in.
+fn toggle_recording(app: AppHandle) {
+    let recording = app.state::<AppState>().recording.lock().unwrap().is_some();
+    tauri::async_runtime::spawn(async move {
+        let result = if recording {
+            do_stop_recording(app).await.map(|_| ())
+        } else {
+            do_start_recording(&app, None).map(|_| ())
+        };
+        if let Err(e) = result {
+            tracing::warn!("toggle recording failed: {e}");
+        }
+    });
+}
+
+/// Quit from the tray: finalize any active recording first so the audio and
+/// meeting status are safe (the pipeline resumes via Retry on next launch).
+fn quit(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let recording = app.state::<AppState>().recording.lock().unwrap().is_some();
+        if recording {
+            let _ = do_stop_recording(app.clone()).await;
+        }
+        app.exit(0);
+    });
+}
+
+fn update_tray(app: &AppHandle, recording: bool) {
+    #[cfg(desktop)]
+    tray::update(app, recording);
+    #[cfg(not(desktop))]
+    let _ = (app, recording);
+}
+
+#[cfg(desktop)]
+fn init_global_shortcut(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+    let modifiers = if cfg!(target_os = "macos") {
+        Modifiers::SUPER | Modifiers::SHIFT
+    } else {
+        Modifiers::CONTROL | Modifiers::SHIFT
+    };
+    let shortcut = Shortcut::new(Some(modifiers), Code::KeyR);
+
+    if let Err(e) = app.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(move |app, pressed, event| {
+                if *pressed == shortcut && event.state() == ShortcutState::Pressed {
+                    toggle_recording(app.clone());
+                }
+            })
+            .build(),
+    ) {
+        tracing::warn!("global-shortcut plugin failed to initialize: {e}");
+        return;
+    }
+    // Registration can fail if another app owns the combination — the tray
+    // still works, so warn instead of failing startup.
+    if let Err(e) = app.global_shortcut().register(shortcut) {
+        tracing::warn!("could not register global shortcut Ctrl/Cmd+Shift+R: {e}");
+    }
 }
 
 // ── pipeline ────────────────────────────────────────────────────────────────
 
-fn spawn_pipeline(app: AppHandle, state: &State<AppState>, meeting_id: String) {
+fn spawn_pipeline(app: &AppHandle, meeting_id: String) {
+    let state = app.state::<AppState>();
     let storage = Arc::clone(&state.storage);
     let config = state.config.lock().unwrap().clone();
     let progress_app = app.clone();
@@ -291,8 +379,8 @@ fn spawn_pipeline(app: AppHandle, state: &State<AppState>, meeting_id: String) {
 }
 
 #[tauri::command]
-fn retry_pipeline(app: AppHandle, state: State<AppState>, meeting_id: String) -> CmdResult<()> {
-    spawn_pipeline(app, &state, meeting_id);
+fn retry_pipeline(app: AppHandle, meeting_id: String) -> CmdResult<()> {
+    spawn_pipeline(&app, meeting_id);
     Ok(())
 }
 
@@ -397,7 +485,23 @@ pub fn run() {
                 recording: Mutex::new(None),
                 data_dir,
             });
+            #[cfg(desktop)]
+            {
+                tray::init(app.handle())?;
+                init_global_shortcut(app.handle());
+            }
             Ok(())
+        })
+        // Closing the window hides to the tray so quick-start keeps working;
+        // Quit lives in the tray menu.
+        .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            #[cfg(not(desktop))]
+            let _ = (window, event);
         })
         .invoke_handler(tauri::generate_handler![
             list_meetings,
