@@ -20,6 +20,7 @@ Phases 1–3 implemented (Windows desktop): recording core, SQLite storage, Whis
 - `npx tsc --noEmit` / `npm run build` — frontend typecheck / bundle
 - `npm run tauri build` — release bundle
 - MCP smoke test: pipe JSON-RPC lines into `target/debug/ogma.exe --mcp`
+- Releases: push a `v*` tag → `.github/workflows/release.yml` builds Windows + macOS (arm64) installers into a draft GitHub Release. Version bump touches `package.json`, workspace `Cargo.toml`, and `src-tauri/tauri.conf.json` — see `docs/RELEASING.md`.
 
 ## Layout
 

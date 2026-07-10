@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      # tsc typecheck + vite build; the built ../dist is also required by
+      # tauri::generate_context! for the cargo steps below to compile
+      - run: npm run build
+
+      - run: cargo check --workspace --all-targets
+
+      - run: cargo test -p ogma-core
