@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage } from "../api";
 import { armedButton, h } from "../dom";
 import { formatDuration, friendlyDate } from "../format";
@@ -31,17 +30,11 @@ export function renderLibrary(navigate: Navigate): View {
       title: "Import an audio file (WAV, M4A, MP3, FLAC, OGG) and run the normal pipeline",
       onclick: async () => {
         try {
-          const path = await open({
-            multiple: false,
-            filters: [
-              { name: "Audio", extensions: ["wav", "m4a", "mp3", "flac", "ogg", "mp4", "aac"] },
-            ],
-          });
-          if (typeof path !== "string") return;
           importBtn.disabled = true;
           importBtn.textContent = "IMPORTING…";
-          toast("Importing audio…");
-          await api.importAudioFile(path);
+          // The file picker itself runs on the Rust side; null = cancelled.
+          const id = await api.importAudioFile();
+          if (id !== null) toast("Imported — processing…");
         } catch (e) {
           toast(errorMessage(e), "error");
         } finally {

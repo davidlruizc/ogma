@@ -8,7 +8,7 @@
 //! run the normal pipeline.
 
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -20,7 +20,14 @@ use symphonia::core::probe::Hint;
 
 use crate::error::{Error, Result};
 
-use super::{wav, RecordingResult, Resampler, SEGMENT_SAMPLES};
+use super::{wav, RecordingResult, Resampler, SegmentSink};
+
+/// Hard ceiling on decoded import length. Meetings are 1–3 h; 6 h leaves slack
+/// while bounding what a decompression bomb (tiny FLAC/OGG of silence) can
+/// expand to on disk — and, downstream, what the auto-run pipeline can spend
+/// on Whisper/Claude API calls.
+pub const MAX_IMPORT_HOURS: u64 = 6;
+const MAX_IMPORT_SAMPLES: u64 = MAX_IMPORT_HOURS * 3600 * wav::SAMPLE_RATE as u64;
 
 /// Decode `src` into 5-minute segments under `meeting_dir` and return them
 /// like a finished recording. Fails without leaving partial segments behind
@@ -50,22 +57,34 @@ pub fn import_file(src: &Path, meeting_dir: &Path) -> Result<RecordingResult> {
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .ok_or_else(|| Error::Audio("no decodable audio track in file".into()))?;
     let track_id = track.id;
+    // Container-declared length (when known), to detect silent truncation.
+    let expected_ms: Option<i64> = track
+        .codec_params
+        .n_frames
+        .zip(track.codec_params.sample_rate)
+        .map(|(frames, rate)| (frames as i128 * 1000 / rate as i128) as i64);
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| Error::Audio(format!("unsupported audio codec: {e}")))?;
 
-    let mut sink = SegmentSink::new(meeting_dir);
+    let mut sink = SegmentSink::new(meeting_dir).with_max_samples(MAX_IMPORT_SAMPLES);
     let mut resampler: Option<Resampler> = None;
     let mut in_rate: u32 = 0;
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
     let mut mono: Vec<f32> = Vec::new();
+    let mut skipped_packets: u64 = 0;
+    let mut truncated = false;
 
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            // Both EOF and a required reset (e.g. chained streams) end the import.
             Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(SymError::ResetRequired) => break,
+            // A required reset (e.g. chained streams) ends the import early;
+            // the shortfall is caught against `expected_ms` below.
+            Err(SymError::ResetRequired) => {
+                truncated = true;
+                break;
+            }
             Err(e) => return Err(Error::Audio(format!("error reading audio file: {e}"))),
         };
         if packet.track_id() != track_id {
@@ -74,7 +93,10 @@ pub fn import_file(src: &Path, meeting_dir: &Path) -> Result<RecordingResult> {
         let decoded = match decoder.decode(&packet) {
             Ok(d) => d,
             // A corrupt packet is skippable; the stream stays aligned.
-            Err(SymError::DecodeError(_)) => continue,
+            Err(SymError::DecodeError(_)) => {
+                skipped_packets += 1;
+                continue;
+            }
             Err(e) => return Err(Error::Audio(format!("error decoding audio: {e}"))),
         };
         let spec = *decoded.spec();
@@ -112,67 +134,33 @@ pub fn import_file(src: &Path, meeting_dir: &Path) -> Result<RecordingResult> {
         sink.write(&out)?;
     }
 
-    sink.finish()
-}
-
-/// Rotating segment writer, mirroring the live recorder's rotation logic.
-struct SegmentSink {
-    dir: PathBuf,
-    segments: Vec<PathBuf>,
-    writer: Option<wav::WavWriter>,
-    seg_samples: u64,
-    total_samples: u64,
-}
-
-impl SegmentSink {
-    fn new(dir: &Path) -> SegmentSink {
-        SegmentSink {
-            dir: dir.to_path_buf(),
-            segments: Vec::new(),
-            writer: None,
-            seg_samples: 0,
-            total_samples: 0,
+    let result = sink.finish()?;
+    if result.duration_ms == 0 {
+        return Err(Error::Audio("no audio could be decoded from the file".into()));
+    }
+    // Don't let a partially corrupt/truncated file import silently short: the
+    // pipeline would produce notes for a fraction of the meeting and nothing
+    // would tell the user.
+    if let Some(expected) = expected_ms.filter(|&e| e > 0) {
+        if result.duration_ms < expected * 9 / 10 {
+            return Err(Error::Audio(format!(
+                "only {} s of the file's {} s could be decoded — the file appears corrupt or truncated",
+                result.duration_ms / 1000,
+                expected / 1000
+            )));
         }
     }
-
-    fn write(&mut self, mut samples: &[i16]) -> Result<()> {
-        while !samples.is_empty() {
-            if self.writer.is_none() {
-                let path = self.dir.join(format!("seg-{:03}.wav", self.segments.len()));
-                self.writer = Some(wav::WavWriter::create(&path)?);
-                self.segments.push(path);
-                self.seg_samples = 0;
-            }
-            let room = (SEGMENT_SAMPLES - self.seg_samples) as usize;
-            let take = room.min(samples.len());
-            self.writer.as_mut().unwrap().write_samples(&samples[..take])?;
-            self.seg_samples += take as u64;
-            self.total_samples += take as u64;
-            samples = &samples[take..];
-            if self.seg_samples >= SEGMENT_SAMPLES {
-                self.writer.take().unwrap().finalize()?;
-            }
-        }
-        Ok(())
+    if truncated || skipped_packets > 0 {
+        tracing::warn!(
+            "import decoded with gaps: {skipped_packets} corrupt packet(s) skipped, ended early: {truncated}"
+        );
     }
-
-    fn finish(mut self) -> Result<RecordingResult> {
-        if let Some(w) = self.writer.take() {
-            w.finalize()?;
-        }
-        if self.total_samples == 0 {
-            return Err(Error::Audio("no audio could be decoded from the file".into()));
-        }
-        Ok(RecordingResult {
-            segments: self.segments,
-            duration_ms: (self.total_samples * 1000 / wav::SAMPLE_RATE as u64) as i64,
-        })
-    }
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::SEGMENT_SECONDS;
+    use super::super::{SEGMENT_SAMPLES, SEGMENT_SECONDS};
     use super::*;
     use std::io::Write as _;
 
@@ -259,5 +247,49 @@ mod tests {
         std::fs::write(&src, b"definitely not a wav file").unwrap();
         let dir = tmp.path().join("meeting");
         assert!(import_file(&src, &dir).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_sample_audio() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("empty.wav");
+        write_test_wav(&src, 16_000, 1, &[]);
+        let dir = tmp.path().join("meeting");
+        let err = import_file(&src, &dir).unwrap_err();
+        assert!(
+            err.to_string().contains("no audio"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_heavily_truncated_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("truncated.wav");
+        // Header declares 2 s of 16 kHz mono audio…
+        write_test_wav(&src, 16_000, 1, &vec![1000i16; 32_000]);
+        // …but the file is cut off after 0.25 s of data.
+        let full = std::fs::read(&src).unwrap();
+        std::fs::write(&src, &full[..44 + 8_000]).unwrap();
+        let dir = tmp.path().join("meeting");
+        let err = import_file(&src, &dir).unwrap_err();
+        assert!(
+            err.to_string().contains("could be decoded"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_audio_longer_than_the_import_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("meeting");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sink = SegmentSink::new(&dir).with_max_samples(1_000);
+        sink.write(&[0i16; 800]).unwrap();
+        let err = sink.write(&[0i16; 300]).unwrap_err();
+        assert!(
+            err.to_string().contains("maximum import length"),
+            "unexpected error: {err}"
+        );
     }
 }

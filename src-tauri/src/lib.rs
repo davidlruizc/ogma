@@ -272,19 +272,51 @@ async fn discard_recording(app: AppHandle, state: State<'_, AppState>) -> CmdRes
     Ok(())
 }
 
+/// Extensions offered by the import picker and accepted by the importer.
+const IMPORT_AUDIO_EXTS: [&str; 7] = ["wav", "m4a", "mp3", "flac", "ogg", "mp4", "aac"];
+
 /// Import an existing audio file (WAV/M4A/MP3/FLAC/OGG) as a new meeting:
-/// decode → 16 kHz mono 5-min segments → normal pipeline. The meeting row is
-/// only created after a successful decode, so a bad file leaves nothing behind.
+/// native file picker → decode → 16 kHz mono 5-min segments → normal pipeline.
+/// The picker runs Rust-side so the webview never supplies a path (a
+/// compromised webview can't feed arbitrary files to the transcribe→Notion
+/// pipeline). Returns `None` if the user cancels. The meeting row is only
+/// created after a successful decode, and every earlier failure removes the
+/// meeting dir, so a bad file leaves nothing behind.
 #[tauri::command]
 async fn import_audio_file(
     app: AppHandle,
     state: State<'_, AppState>,
-    path: String,
     title: Option<String>,
-) -> CmdResult<String> {
-    let src = PathBuf::from(&path);
+) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picker_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        picker_app
+            .dialog()
+            .file()
+            .add_filter("Audio", &IMPORT_AUDIO_EXTS)
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(err_str)?;
+    let Some(picked) = picked else {
+        return Ok(None); // user cancelled the picker
+    };
+    let src = picked.into_path().map_err(err_str)?;
+    // Defense in depth behind the dialog filter (e.g. a typed-in filename).
+    let ext_ok = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| IMPORT_AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()));
+    if !ext_ok {
+        return Err(format!(
+            "unsupported file type — expected one of: {}",
+            IMPORT_AUDIO_EXTS.join(", ")
+        ));
+    }
     if !src.is_file() {
-        return Err(format!("file not found: {path}"));
+        return Err(format!("file not found: {}", src.display()));
     }
     let id = uuid::Uuid::new_v4().to_string();
     let dir = state.meetings_dir().join(&id);
@@ -296,20 +328,24 @@ async fn import_audio_file(
 
     // Decode + segment off the async runtime; then concat for playback.
     let (src_task, dir_task) = (src.clone(), dir.clone());
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
         let result = recording::import::import_file(&src_task, &dir_task)?;
         if let Err(e) = recording::wav::concat(&result.segments, &dir_task.join("audio.wav")) {
             tracing::warn!("audio concat failed: {e}");
         }
         Ok::<_, ogma_core::Error>(result)
     })
-    .await
-    .map_err(err_str)?;
-    let result = match result {
-        Ok(r) => r,
-        Err(e) => {
+    .await;
+    let result = match joined {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e.to_string());
+        }
+        // Join failure (decode task panicked): same cleanup contract.
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(err_str(e));
         }
     };
 
@@ -323,14 +359,18 @@ async fn import_audio_file(
         audio_dir: dir.to_string_lossy().to_string(),
         notion_page_id: None,
     };
-    {
+    let created = {
         let storage = state.storage.lock().unwrap();
-        storage.create_meeting(&meeting).map_err(err_str)?;
+        storage.create_meeting(&meeting)
+    };
+    if let Err(e) = created {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(err_str(e));
     }
 
     let _ = app.emit("meetings:changed", ());
     spawn_pipeline(app, &state, id.clone());
-    Ok(id)
+    Ok(Some(id))
 }
 
 // ── pipeline ────────────────────────────────────────────────────────────────
