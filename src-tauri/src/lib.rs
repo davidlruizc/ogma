@@ -1,7 +1,11 @@
 //! Tauri app layer: commands + events over ogma-core.
 
+#[cfg(desktop)]
+mod tray;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ogma_core::models::{ActionItem, Meeting, MeetingNotes, MeetingStatus, TranscriptSegment};
 use ogma_core::pipeline::{Pipeline, ProgressEvent};
@@ -19,6 +23,12 @@ struct AppState {
     storage: Arc<Mutex<Storage>>,
     config: Mutex<Config>,
     recording: Mutex<Option<ActiveRecording>>,
+    /// Serializes recording start/stop/quit transitions: toggle decisions
+    /// stay atomic (no stop-then-surprise-restart) and quit waits out a stop
+    /// that is still finalizing instead of exiting mid-write.
+    transition: tokio::sync::Mutex<()>,
+    /// Last tray/shortcut toggle, to debounce key auto-repeat.
+    last_toggle: Mutex<Option<Instant>>,
     data_dir: PathBuf,
 }
 
@@ -119,7 +129,21 @@ fn set_action_item_status(state: State<AppState>, id: i64, status: String) -> Cm
 // ── recording ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>) -> CmdResult<Meeting> {
+async fn start_recording(app: AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    do_start_recording(&app, title).await
+}
+
+/// Shared by the `start_recording` command, the tray menu and the global
+/// shortcut, so recording can begin without the window being open.
+async fn do_start_recording(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    let state = app.state::<AppState>();
+    let _transition = state.transition.lock().await;
+    start_recording_locked(app, title)
+}
+
+/// Body of a start transition; callers must hold `AppState::transition`.
+fn start_recording_locked(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    let state = app.state::<AppState>();
     let mut active = state.recording.lock().unwrap();
     if active.is_some() {
         return Err("a recording is already in progress".into());
@@ -163,6 +187,7 @@ fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>
         meeting_id: id,
     });
     let _ = app.emit("meetings:changed", ());
+    update_tray(app, true);
     Ok(meeting)
 }
 
@@ -213,11 +238,27 @@ fn recording_state(state: State<AppState>) -> CmdResult<RecordingState> {
 }
 
 #[tauri::command]
-async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> CmdResult<String> {
+async fn stop_recording(app: AppHandle) -> CmdResult<String> {
+    do_stop_recording(app).await
+}
+
+/// Shared by the `stop_recording` command, the tray menu, the global shortcut
+/// and Quit — finalizes the audio and kicks off the pipeline.
+async fn do_stop_recording(app: AppHandle) -> CmdResult<String> {
+    let state = app.state::<AppState>();
+    let _transition = state.transition.lock().await;
+    stop_recording_locked(&app).await
+}
+
+/// Body of a stop transition; callers must hold `AppState::transition` so
+/// quit/toggle can't observe a half-finalized stop.
+async fn stop_recording_locked(app: &AppHandle) -> CmdResult<String> {
+    let state = app.state::<AppState>();
     let session = {
         let mut active = state.recording.lock().unwrap();
         active.take().ok_or("no active recording")?
     };
+    update_tray(app, false);
     let meeting_id = session.meeting_id.clone();
 
     // Recorder::stop joins audio threads — run it off the async runtime.
@@ -249,7 +290,7 @@ async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> CmdResult
     }
 
     let _ = app.emit("meetings:changed", ());
-    spawn_pipeline(app, &state, meeting_id.clone());
+    spawn_pipeline(app, meeting_id.clone());
     Ok(meeting_id)
 }
 
@@ -269,6 +310,7 @@ async fn discard_recording(app: AppHandle, state: State<'_, AppState>) -> CmdRes
     };
     let _ = std::fs::remove_dir_all(audio_dir);
     let _ = app.emit("meetings:changed", ());
+    update_tray(&app, false);
     Ok(())
 }
 
@@ -369,13 +411,104 @@ async fn import_audio_file(
     }
 
     let _ = app.emit("meetings:changed", ());
-    spawn_pipeline(app, &state, id.clone());
+    spawn_pipeline(&app, id.clone());
     Ok(Some(id))
+}
+
+// ── tray & global shortcut ──────────────────────────────────────────────────
+
+/// Start if idle, stop if recording — the tray/global-shortcut entry point.
+/// Errors are logged, not surfaced: there may be no window to show them in.
+fn toggle_recording(app: AppHandle) {
+    // Debounce: Windows delivers key auto-repeat for global shortcuts
+    // (RegisterHotKey without MOD_NOREPEAT), and a nervous double-press must
+    // not stop the mic and immediately restart it.
+    {
+        let state = app.state::<AppState>();
+        let mut last = state.last_toggle.lock().unwrap();
+        let now = Instant::now();
+        if last.is_some_and(|t| now.duration_since(t) < Duration::from_millis(400)) {
+            return;
+        }
+        *last = Some(now);
+    }
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        // Decide start-vs-stop under the transition lock so the snapshot
+        // can't go stale while a previous toggle is still finalizing.
+        let _transition = state.transition.lock().await;
+        let recording = state.recording.lock().unwrap().is_some();
+        let result = if recording {
+            stop_recording_locked(&app).await.map(|_| ())
+        } else {
+            start_recording_locked(&app, None).map(|_| ())
+        };
+        if let Err(e) = result {
+            tracing::warn!("toggle recording failed: {e}");
+        }
+    });
+}
+
+/// Quit from the tray: finalize any active recording first so the audio and
+/// meeting status are safe (an interrupted pipeline is marked as a retryable
+/// error on next launch by `recover_on_startup`).
+fn quit(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        // Taking the transition lock waits out a stop that is already
+        // finalizing, so we never exit mid-write.
+        let _transition = state.transition.lock().await;
+        let recording = state.recording.lock().unwrap().is_some();
+        if recording {
+            if let Err(e) = stop_recording_locked(&app).await {
+                tracing::warn!("finalizing recording before quit failed: {e}");
+            }
+        }
+        app.exit(0);
+    });
+}
+
+fn update_tray(app: &AppHandle, recording: bool) {
+    #[cfg(desktop)]
+    tray::update(app, recording);
+    #[cfg(not(desktop))]
+    let _ = (app, recording);
+}
+
+#[cfg(desktop)]
+fn init_global_shortcut(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+    let modifiers = if cfg!(target_os = "macos") {
+        Modifiers::SUPER | Modifiers::SHIFT
+    } else {
+        Modifiers::CONTROL | Modifiers::SHIFT
+    };
+    let shortcut = Shortcut::new(Some(modifiers), Code::KeyR);
+
+    if let Err(e) = app.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(move |app, pressed, event| {
+                if *pressed == shortcut && event.state() == ShortcutState::Pressed {
+                    toggle_recording(app.clone());
+                }
+            })
+            .build(),
+    ) {
+        tracing::warn!("global-shortcut plugin failed to initialize: {e}");
+        return;
+    }
+    // Registration can fail if another app owns the combination — the tray
+    // still works, so warn instead of failing startup.
+    if let Err(e) = app.global_shortcut().register(shortcut) {
+        tracing::warn!("could not register global shortcut Ctrl/Cmd+Shift+R: {e}");
+    }
 }
 
 // ── pipeline ────────────────────────────────────────────────────────────────
 
-fn spawn_pipeline(app: AppHandle, state: &State<AppState>, meeting_id: String) {
+fn spawn_pipeline(app: &AppHandle, meeting_id: String) {
+    let state = app.state::<AppState>();
     let storage = Arc::clone(&state.storage);
     let config = state.config.lock().unwrap().clone();
     let progress_app = app.clone();
@@ -392,8 +525,8 @@ fn spawn_pipeline(app: AppHandle, state: &State<AppState>, meeting_id: String) {
 }
 
 #[tauri::command]
-fn retry_pipeline(app: AppHandle, state: State<AppState>, meeting_id: String) -> CmdResult<()> {
-    spawn_pipeline(app, &state, meeting_id);
+fn retry_pipeline(app: AppHandle, meeting_id: String) -> CmdResult<()> {
+    spawn_pipeline(&app, meeting_id);
     Ok(())
 }
 
@@ -459,7 +592,13 @@ fn recover_on_startup(storage: &Arc<Mutex<Storage>>) {
             }
         }
     }
+    // `Recorded` at startup means the audio was finalized but the pipeline
+    // never wrote its first status (e.g. quit or a crash raced the spawned
+    // pipeline task) — without this sweep it would sit as "queued" forever
+    // with no Retry button. This also gives recovered crashed recordings
+    // (set to `Recorded` above) a retryable state.
     for status in [
+        MeetingStatus::Recorded,
         MeetingStatus::Transcribing,
         MeetingStatus::Summarizing,
         MeetingStatus::Syncing,
@@ -497,9 +636,27 @@ pub fn run() {
                 storage,
                 config: Mutex::new(config),
                 recording: Mutex::new(None),
+                transition: tokio::sync::Mutex::new(()),
+                last_toggle: Mutex::new(None),
                 data_dir,
             });
+            #[cfg(desktop)]
+            {
+                tray::init(app.handle())?;
+                init_global_shortcut(app.handle());
+            }
             Ok(())
+        })
+        // Closing the window hides to the tray so quick-start keeps working;
+        // Quit lives in the tray menu.
+        .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            #[cfg(not(desktop))]
+            let _ = (window, event);
         })
         .invoke_handler(tauri::generate_handler![
             list_meetings,
