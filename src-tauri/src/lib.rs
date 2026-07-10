@@ -272,6 +272,67 @@ async fn discard_recording(app: AppHandle, state: State<'_, AppState>) -> CmdRes
     Ok(())
 }
 
+/// Import an existing audio file (WAV/M4A/MP3/FLAC/OGG) as a new meeting:
+/// decode → 16 kHz mono 5-min segments → normal pipeline. The meeting row is
+/// only created after a successful decode, so a bad file leaves nothing behind.
+#[tauri::command]
+async fn import_audio_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    title: Option<String>,
+) -> CmdResult<String> {
+    let src = PathBuf::from(&path);
+    if !src.is_file() {
+        return Err(format!("file not found: {path}"));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = state.meetings_dir().join(&id);
+    let now = chrono::Local::now();
+    let title = title
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| src.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .unwrap_or_else(|| format!("Imported {}", now.format("%Y-%m-%d %H:%M")));
+
+    // Decode + segment off the async runtime; then concat for playback.
+    let (src_task, dir_task) = (src.clone(), dir.clone());
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = recording::import::import_file(&src_task, &dir_task)?;
+        if let Err(e) = recording::wav::concat(&result.segments, &dir_task.join("audio.wav")) {
+            tracing::warn!("audio concat failed: {e}");
+        }
+        Ok::<_, ogma_core::Error>(result)
+    })
+    .await
+    .map_err(err_str)?;
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e.to_string());
+        }
+    };
+
+    let meeting = Meeting {
+        id: id.clone(),
+        title,
+        created_at: now.to_rfc3339(),
+        duration_ms: result.duration_ms,
+        status: MeetingStatus::Recorded,
+        error: None,
+        audio_dir: dir.to_string_lossy().to_string(),
+        notion_page_id: None,
+    };
+    {
+        let storage = state.storage.lock().unwrap();
+        storage.create_meeting(&meeting).map_err(err_str)?;
+    }
+
+    let _ = app.emit("meetings:changed", ());
+    spawn_pipeline(app, &state, id.clone());
+    Ok(id)
+}
+
 // ── pipeline ────────────────────────────────────────────────────────────────
 
 fn spawn_pipeline(app: AppHandle, state: &State<AppState>, meeting_id: String) {
@@ -385,6 +446,7 @@ pub fn data_dir_for(app: &AppHandle) -> PathBuf {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = data_dir_for(app.handle());
             std::fs::create_dir_all(&data_dir)?;
@@ -413,6 +475,7 @@ pub fn run() {
             recording_state,
             stop_recording,
             discard_recording,
+            import_audio_file,
             retry_pipeline,
             get_settings,
             save_settings,

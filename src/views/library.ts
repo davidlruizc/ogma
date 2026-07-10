@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage } from "../api";
 import { armedButton, h } from "../dom";
 import { formatDuration, friendlyDate } from "../format";
@@ -23,6 +24,35 @@ export function renderLibrary(navigate: Navigate): View {
 
   const listEl = h("div", { class: "meeting-list" });
 
+  const importBtn = h(
+    "button",
+    {
+      class: "pill",
+      title: "Import an audio file (WAV, M4A, MP3, FLAC, OGG) and run the normal pipeline",
+      onclick: async () => {
+        try {
+          const path = await open({
+            multiple: false,
+            filters: [
+              { name: "Audio", extensions: ["wav", "m4a", "mp3", "flac", "ogg", "mp4", "aac"] },
+            ],
+          });
+          if (typeof path !== "string") return;
+          importBtn.disabled = true;
+          importBtn.textContent = "IMPORTING…";
+          toast("Importing audio…");
+          await api.importAudioFile(path);
+        } catch (e) {
+          toast(errorMessage(e), "error");
+        } finally {
+          importBtn.disabled = false;
+          importBtn.textContent = "IMPORT AUDIO";
+        }
+      },
+    },
+    "IMPORT AUDIO",
+  );
+
   const screen = h(
     "div",
     { class: "screen screen-pad" },
@@ -31,6 +61,7 @@ export function renderLibrary(navigate: Navigate): View {
       { class: "library-head" },
       h("div", { class: "screen-title" }, "Library"),
       h("span", { class: "flex-spacer" }),
+      importBtn,
       searchInput,
     ),
     listEl,

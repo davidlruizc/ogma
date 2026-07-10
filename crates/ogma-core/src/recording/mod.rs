@@ -5,6 +5,7 @@
 //! does downmix/resample/segmentation. The UI talks to `Recorder` (Send),
 //! which only holds flags, counters and join handles.
 
+pub mod import;
 pub mod wake;
 pub mod wav;
 

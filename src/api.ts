@@ -35,6 +35,9 @@ export const api = {
   stopRecording: () => invoke<string>("stop_recording"),
   discardRecording: () => invoke<void>("discard_recording"),
 
+  importAudioFile: (path: string, title: string | null = null) =>
+    invoke<string>("import_audio_file", { path, title }),
+
   retryPipeline: (meetingId: string) =>
     invoke<void>("retry_pipeline", { meetingId }),
 
