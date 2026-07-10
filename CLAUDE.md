@@ -10,7 +10,11 @@ A Tauri 2 desktop app (Rust backend + Vite/TypeScript UI) that records in-person
 
 ## Current state
 
-Phases 1–3 implemented (Windows desktop): recording core, SQLite storage, Whisper + Claude pipeline, Notion sync, MCP server, full UI. Not yet exercised against the live paid APIs end-to-end; Phase 4 (macOS/iOS) not started.
+Phases 1–3 implemented (Windows desktop) and **verified end-to-end against the live paid APIs** (July 2026): recording core, SQLite storage, Whisper + Claude pipeline, Notion sync, MCP server, full UI. Phase 4 in progress:
+
+- **macOS:** support code complete (IOKit wake lock in `recording/wake.rs`, mic permission in `src-tauri/Info.plist`, `Entitlements.plist`, macOS CI job + release `.dmg`) — not yet verified on real Mac hardware.
+- **iOS:** gated on the background-recording spike (`docs/ios-background-spike.md`) — needs a Mac + physical iPhone.
+- **Audio-file import** (WAV/M4A/MP3/FLAC/OGG → normal pipeline) implemented on desktop — the Phase 4 mobile fallback path, via the library's Import Audio button.
 
 ## Commands
 
@@ -36,6 +40,7 @@ Phases 1–3 implemented (Windows desktop): recording core, SQLite storage, Whis
 - Unlabeled speaker sentinel is `"Speaker ?"` (`pipeline::UNLABELED_SPEAKER`).
 - MCP mode must never print to stdout except JSON-RPC (logging goes to stderr).
 - `Recorder` uses a dedicated audio thread because cpal streams are `!Send`; `stop()` is called via `spawn_blocking`.
+- Audio import (`recording/import.rs`) decodes via `symphonia` (decode-only — WAV write stays hand-rolled, still no ffmpeg) and emits the same rotating 5-min 16kHz segments the live recorder produces, so everything downstream is untouched.
 
 ## Locked-in decisions (don't relitigate without asking the user)
 

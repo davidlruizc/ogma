@@ -8,7 +8,13 @@ on:
 
 jobs:
   check:
-    runs-on: windows-latest
+    # macOS in the matrix keeps the Phase-4 platform code (IOKit wake lock,
+    # keyring, cpal) compiling and unit-tested even though dev happens on Windows.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

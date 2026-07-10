@@ -23,6 +23,29 @@ export function renderLibrary(navigate: Navigate): View {
 
   const listEl = h("div", { class: "meeting-list" });
 
+  const importBtn = h(
+    "button",
+    {
+      class: "pill",
+      title: "Import an audio file (WAV, M4A, MP3, FLAC, OGG) and run the normal pipeline",
+      onclick: async () => {
+        try {
+          importBtn.disabled = true;
+          importBtn.textContent = "IMPORTING…";
+          // The file picker itself runs on the Rust side; null = cancelled.
+          const id = await api.importAudioFile();
+          if (id !== null) toast("Imported — processing…");
+        } catch (e) {
+          toast(errorMessage(e), "error");
+        } finally {
+          importBtn.disabled = false;
+          importBtn.textContent = "IMPORT AUDIO";
+        }
+      },
+    },
+    "IMPORT AUDIO",
+  );
+
   const screen = h(
     "div",
     { class: "screen screen-pad" },
@@ -31,6 +54,7 @@ export function renderLibrary(navigate: Navigate): View {
       { class: "library-head" },
       h("div", { class: "screen-title" }, "Library"),
       h("span", { class: "flex-spacer" }),
+      importBtn,
       searchInput,
     ),
     listEl,
