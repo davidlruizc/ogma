@@ -33,6 +33,8 @@ Cloud processing (~$1.25 per 3-hour meeting) is a deliberate choice: it makes th
 | 3 | Notion sync + MCP server | ✅ Implemented (MCP stdio smoke-tested) |
 | 4 | macOS, then iOS (Tauri 2 mobile) | — |
 
+Future feature ideas (more export destinations, tray/menu-bar quick recording, Notion-optional notes) are tracked in the [PLAN.md backlog](PLAN.md#backlog--future-feature-ideas-post-v1-unscheduled).
+
 ## Development
 
 Requires Rust (stable), Node.js, and the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your platform.

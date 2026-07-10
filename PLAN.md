@@ -111,3 +111,13 @@ Define two Rust traits as a seam (one cloud impl each in v1; local can slot in l
 ## Suggested build order
 
 Phase 1 → 2 gives a fully useful single-machine product fast; 3 adds the integrations; 4 extends platforms. Each phase is independently shippable.
+
+## Backlog — future feature ideas (post-v1, unscheduled)
+
+Ideas being tracked but not yet designed or committed. Order is rough priority; none block Phase 4.
+
+1. **More note-taking destinations beyond Notion.** Investigate which popular note-taking apps people would want transcripts/meeting notes pushed to (e.g. Google Docs, Obsidian, OneNote, Apple Notes, Evernote) and offer a selectable set of export destinations. Architecturally this means generalizing the Notion sync into a `SyncDestination`-style trait, mirroring how `TranscriptionProvider`/`NotesProvider` already abstract the AI side. Starts with a research task: shortlist candidates by API availability and user demand.
+
+2. **Quick-start recording from the menu bar / system tray.** On macOS, a persistent top-bar (menu bar) icon that starts/stops recording in one click; same idea on Windows via the system tray. Optionally a global keyboard shortcut/command to start recording without opening the main window. Tauri 2 has tray + global-shortcut APIs, so this is likely a thin layer over the existing `Recorder`.
+
+3. **Make Notion optional — in-app notes first, external link second.** Today a Notion connection is effectively required to have a canonical home for notes. Transition to: step 1, notes/transcripts are fully first-class *in the app* (SQLite already stores everything — this is mostly UX: viewing, editing, exporting without Notion configured); step 2, linking to Notion (or any destination from idea #1) becomes an optional "connect your favorite app" integration. **Note:** this revises the "Notion is the canonical cross-device store" locked-in decision — cross-device sync strategy needs a rethink when it lands.
