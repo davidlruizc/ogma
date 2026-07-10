@@ -5,6 +5,7 @@
 //! does downmix/resample/segmentation. The UI talks to `Recorder` (Send),
 //! which only holds flags, counters and join handles.
 
+pub mod import;
 pub mod wake;
 pub mod wav;
 
@@ -47,6 +48,100 @@ enum AudioBlock {
     /// Mono f32 samples at the device rate.
     Samples(Vec<f32>),
     Finish,
+}
+
+/// Rotating 5-minute segment writer shared by the live recorder and the
+/// audio-file importer, so the load-bearing `seg-NNN.wav` naming/rotation
+/// contract (globbed by `list_segments` and crash recovery) has a single
+/// implementation.
+struct SegmentSink {
+    dir: PathBuf,
+    segments: Vec<PathBuf>,
+    writer: Option<wav::WavWriter>,
+    seg_samples: u64,
+    total_samples: u64,
+    since_flush: u64,
+    /// Flush the current segment every N samples (live recording wants ~1s of
+    /// crash exposure; bulk import doesn't need mid-segment flushes).
+    flush_every: Option<u64>,
+    /// Refuse to write more than N samples total (bounds decompression bombs
+    /// on the import path; the live recorder is naturally realtime-bounded).
+    max_samples: Option<u64>,
+}
+
+impl SegmentSink {
+    fn new(dir: &Path) -> SegmentSink {
+        SegmentSink {
+            dir: dir.to_path_buf(),
+            segments: Vec::new(),
+            writer: None,
+            seg_samples: 0,
+            total_samples: 0,
+            since_flush: 0,
+            flush_every: None,
+            max_samples: None,
+        }
+    }
+
+    fn with_flush_every(mut self, samples: u64) -> SegmentSink {
+        self.flush_every = Some(samples);
+        self
+    }
+
+    fn with_max_samples(mut self, samples: u64) -> SegmentSink {
+        self.max_samples = Some(samples);
+        self
+    }
+
+    fn total_samples(&self) -> u64 {
+        self.total_samples
+    }
+
+    fn write(&mut self, mut samples: &[i16]) -> Result<()> {
+        if let Some(max) = self.max_samples {
+            if self.total_samples + samples.len() as u64 > max {
+                return Err(Error::Audio(format!(
+                    "audio exceeds the maximum import length of {} hours",
+                    max / (3600 * wav::SAMPLE_RATE as u64)
+                )));
+            }
+        }
+        while !samples.is_empty() {
+            if self.writer.is_none() {
+                let path = self.dir.join(format!("seg-{:03}.wav", self.segments.len()));
+                self.writer = Some(wav::WavWriter::create(&path)?);
+                self.segments.push(path);
+                self.seg_samples = 0;
+            }
+            let room = (SEGMENT_SAMPLES - self.seg_samples) as usize;
+            let take = room.min(samples.len());
+            self.writer.as_mut().unwrap().write_samples(&samples[..take])?;
+            self.seg_samples += take as u64;
+            self.total_samples += take as u64;
+            self.since_flush += take as u64;
+            samples = &samples[take..];
+            if self.seg_samples >= SEGMENT_SAMPLES {
+                self.writer.take().unwrap().finalize()?;
+                self.since_flush = 0;
+            } else if self.flush_every.is_some_and(|n| self.since_flush >= n) {
+                self.writer.as_mut().unwrap().flush()?;
+                self.since_flush = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// Finalize the open segment and return the recording. A zero-sample sink
+    /// yields an empty segment list (callers decide whether that's an error).
+    fn finish(mut self) -> Result<RecordingResult> {
+        if let Some(w) = self.writer.take() {
+            w.finalize()?;
+        }
+        Ok(RecordingResult {
+            duration_ms: (self.total_samples * 1000 / wav::SAMPLE_RATE as u64) as i64,
+            segments: self.segments,
+        })
+    }
 }
 
 pub struct Recorder {
@@ -337,10 +432,7 @@ fn spawn_writer_thread(
         .name("ogma-writer".into())
         .spawn(move || {
             let mut resampler = Resampler::new(device_rate, wav::SAMPLE_RATE);
-            let mut segments: Vec<PathBuf> = Vec::new();
-            let mut writer: Option<wav::WavWriter> = None;
-            let mut seg_samples: u64 = 0;
-            let mut since_flush: u64 = 0;
+            let mut sink = SegmentSink::new(&dir).with_flush_every(FLUSH_EVERY_SAMPLES);
             let mut last_level = Instant::now();
 
             loop {
@@ -376,36 +468,11 @@ fn spawn_writer_thread(
                     continue;
                 }
 
-                let mut offset = 0usize;
-                while offset < out.len() {
-                    if writer.is_none() {
-                        let path = dir.join(format!("seg-{:03}.wav", segments.len()));
-                        writer = Some(wav::WavWriter::create(&path)?);
-                        segments.push(path);
-                        seg_samples = 0;
-                    }
-                    let room = (SEGMENT_SAMPLES - seg_samples) as usize;
-                    let take = room.min(out.len() - offset);
-                    let w = writer.as_mut().unwrap();
-                    w.write_samples(&out[offset..offset + take])?;
-                    seg_samples += take as u64;
-                    since_flush += take as u64;
-                    elapsed_samples.fetch_add(take as i64, Ordering::SeqCst);
-                    offset += take;
-
-                    if seg_samples >= SEGMENT_SAMPLES {
-                        writer.take().unwrap().finalize()?;
-                    } else if since_flush >= FLUSH_EVERY_SAMPLES {
-                        w.flush()?;
-                        since_flush = 0;
-                    }
-                }
+                sink.write(&out)?;
+                elapsed_samples.store(sink.total_samples() as i64, Ordering::SeqCst);
             }
 
-            if let Some(w) = writer.take() {
-                w.finalize()?;
-            }
-            Ok(segments)
+            Ok(sink.finish()?.segments)
         })
         .expect("failed to spawn writer thread")
 }

@@ -94,7 +94,7 @@ Define two Rust traits as a seam (one cloud impl each in v1; local can slot in l
 ## Phase 4 — macOS, then iOS
 
 - **macOS:** same codebase; verify cpal input + mic permission (`NSMicrophoneUsageDescription`), sleep prevention. Expected near-free.
-- **iOS (Tauri 2 mobile):** recording UI + pipeline (upload directly from phone; Notion is the shared store so notes appear everywhere). Native recording via `tauri-plugin-audio-recorder` (M4A on mobile) + `UIBackgroundModes: audio` for screen-off recording. **Known risk:** Tauri iOS + long background recording is the least-proven part — validate with a spike (1hr locked-screen recording) before building the full iOS UI. Fallback: keep-screen-on foreground recording, or record with Voice Memos and add an "import audio file" path (worth having on desktop anyway).
+- **iOS (Tauri 2 mobile):** recording UI + pipeline (upload directly from phone; Notion is the shared store so notes appear everywhere). Native recording via `tauri-plugin-audio-recorder` (M4A on mobile) + `UIBackgroundModes: audio` for screen-off recording. **Known risk:** Tauri iOS + long background recording is the least-proven part — validate with a spike (1hr locked-screen recording) before building the full iOS UI. Fallback: keep-screen-on foreground recording, or record with Voice Memos and add an "import audio file" path (worth having on desktop anyway — **implemented:** the library's Import Audio button decodes WAV/M4A/MP3/FLAC/OGG via `symphonia` into the standard 5-min segments and runs the normal pipeline).
 
 ## Key crates/libs
 
