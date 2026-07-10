@@ -5,6 +5,7 @@ mod tray;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ogma_core::models::{ActionItem, Meeting, MeetingNotes, MeetingStatus, TranscriptSegment};
 use ogma_core::pipeline::{Pipeline, ProgressEvent};
@@ -22,6 +23,12 @@ struct AppState {
     storage: Arc<Mutex<Storage>>,
     config: Mutex<Config>,
     recording: Mutex<Option<ActiveRecording>>,
+    /// Serializes recording start/stop/quit transitions: toggle decisions
+    /// stay atomic (no stop-then-surprise-restart) and quit waits out a stop
+    /// that is still finalizing instead of exiting mid-write.
+    transition: tokio::sync::Mutex<()>,
+    /// Last tray/shortcut toggle, to debounce key auto-repeat.
+    last_toggle: Mutex<Option<Instant>>,
     data_dir: PathBuf,
 }
 
@@ -122,13 +129,20 @@ fn set_action_item_status(state: State<AppState>, id: i64, status: String) -> Cm
 // ── recording ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn start_recording(app: AppHandle, title: Option<String>) -> CmdResult<Meeting> {
-    do_start_recording(&app, title)
+async fn start_recording(app: AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    do_start_recording(&app, title).await
 }
 
 /// Shared by the `start_recording` command, the tray menu and the global
 /// shortcut, so recording can begin without the window being open.
-fn do_start_recording(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+async fn do_start_recording(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
+    let state = app.state::<AppState>();
+    let _transition = state.transition.lock().await;
+    start_recording_locked(app, title)
+}
+
+/// Body of a start transition; callers must hold `AppState::transition`.
+fn start_recording_locked(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
     let state = app.state::<AppState>();
     let mut active = state.recording.lock().unwrap();
     if active.is_some() {
@@ -232,11 +246,19 @@ async fn stop_recording(app: AppHandle) -> CmdResult<String> {
 /// and Quit — finalizes the audio and kicks off the pipeline.
 async fn do_stop_recording(app: AppHandle) -> CmdResult<String> {
     let state = app.state::<AppState>();
+    let _transition = state.transition.lock().await;
+    stop_recording_locked(&app).await
+}
+
+/// Body of a stop transition; callers must hold `AppState::transition` so
+/// quit/toggle can't observe a half-finalized stop.
+async fn stop_recording_locked(app: &AppHandle) -> CmdResult<String> {
+    let state = app.state::<AppState>();
     let session = {
         let mut active = state.recording.lock().unwrap();
         active.take().ok_or("no active recording")?
     };
-    update_tray(&app, false);
+    update_tray(app, false);
     let meeting_id = session.meeting_id.clone();
 
     // Recorder::stop joins audio threads — run it off the async runtime.
@@ -268,7 +290,7 @@ async fn do_stop_recording(app: AppHandle) -> CmdResult<String> {
     }
 
     let _ = app.emit("meetings:changed", ());
-    spawn_pipeline(&app, meeting_id.clone());
+    spawn_pipeline(app, meeting_id.clone());
     Ok(meeting_id)
 }
 
@@ -297,12 +319,28 @@ async fn discard_recording(app: AppHandle, state: State<'_, AppState>) -> CmdRes
 /// Start if idle, stop if recording — the tray/global-shortcut entry point.
 /// Errors are logged, not surfaced: there may be no window to show them in.
 fn toggle_recording(app: AppHandle) {
-    let recording = app.state::<AppState>().recording.lock().unwrap().is_some();
+    // Debounce: Windows delivers key auto-repeat for global shortcuts
+    // (RegisterHotKey without MOD_NOREPEAT), and a nervous double-press must
+    // not stop the mic and immediately restart it.
+    {
+        let state = app.state::<AppState>();
+        let mut last = state.last_toggle.lock().unwrap();
+        let now = Instant::now();
+        if last.is_some_and(|t| now.duration_since(t) < Duration::from_millis(400)) {
+            return;
+        }
+        *last = Some(now);
+    }
     tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        // Decide start-vs-stop under the transition lock so the snapshot
+        // can't go stale while a previous toggle is still finalizing.
+        let _transition = state.transition.lock().await;
+        let recording = state.recording.lock().unwrap().is_some();
         let result = if recording {
-            do_stop_recording(app).await.map(|_| ())
+            stop_recording_locked(&app).await.map(|_| ())
         } else {
-            do_start_recording(&app, None).map(|_| ())
+            start_recording_locked(&app, None).map(|_| ())
         };
         if let Err(e) = result {
             tracing::warn!("toggle recording failed: {e}");
@@ -311,12 +349,19 @@ fn toggle_recording(app: AppHandle) {
 }
 
 /// Quit from the tray: finalize any active recording first so the audio and
-/// meeting status are safe (the pipeline resumes via Retry on next launch).
+/// meeting status are safe (an interrupted pipeline is marked as a retryable
+/// error on next launch by `recover_on_startup`).
 fn quit(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let recording = app.state::<AppState>().recording.lock().unwrap().is_some();
+        let state = app.state::<AppState>();
+        // Taking the transition lock waits out a stop that is already
+        // finalizing, so we never exit mid-write.
+        let _transition = state.transition.lock().await;
+        let recording = state.recording.lock().unwrap().is_some();
         if recording {
-            let _ = do_stop_recording(app.clone()).await;
+            if let Err(e) = stop_recording_locked(&app).await {
+                tracing::warn!("finalizing recording before quit failed: {e}");
+            }
         }
         app.exit(0);
     });
@@ -446,7 +491,13 @@ fn recover_on_startup(storage: &Arc<Mutex<Storage>>) {
             }
         }
     }
+    // `Recorded` at startup means the audio was finalized but the pipeline
+    // never wrote its first status (e.g. quit or a crash raced the spawned
+    // pipeline task) — without this sweep it would sit as "queued" forever
+    // with no Retry button. This also gives recovered crashed recordings
+    // (set to `Recorded` above) a retryable state.
     for status in [
+        MeetingStatus::Recorded,
         MeetingStatus::Transcribing,
         MeetingStatus::Summarizing,
         MeetingStatus::Syncing,
@@ -483,6 +534,8 @@ pub fn run() {
                 storage,
                 config: Mutex::new(config),
                 recording: Mutex::new(None),
+                transition: tokio::sync::Mutex::new(()),
+                last_toggle: Mutex::new(None),
                 data_dir,
             });
             #[cfg(desktop)]

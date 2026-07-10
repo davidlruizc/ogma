@@ -42,28 +42,57 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 
 /// Reflect the recording state in the tray (menu label, icon dot, tooltip).
 /// Tray/menu mutation must happen on the main thread on some platforms.
+///
+/// With the window hidden, the tray is the only sign the mic is live — so a
+/// failure to indicate `recording == true` must never be silent: every path
+/// logs, and the fallback is showing the main window (whose record view
+/// reflects the live recording).
 pub fn update(app: &AppHandle, recording: bool) {
-    let app = app.clone();
-    let result = app.clone().run_on_main_thread(move || {
-        let Some(tray) = app.tray_by_id(TRAY_ID) else {
-            return;
-        };
-        match build_menu(&app, recording) {
-            Ok(menu) => {
-                let _ = tray.set_menu(Some(menu));
+    let handle = app.clone();
+    let result = app.run_on_main_thread(move || {
+        let mut indicated = false;
+        if let Some(tray) = handle.tray_by_id(TRAY_ID) {
+            match build_menu(&handle, recording) {
+                Ok(menu) => {
+                    if let Err(e) = tray.set_menu(Some(menu)) {
+                        tracing::warn!("tray menu update failed: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("tray menu rebuild failed: {e}"),
             }
-            Err(e) => tracing::warn!("tray menu rebuild failed: {e}"),
-        }
-        let icon = if recording {
-            recording_icon(&base_icon(&app))
+            let icon = if recording {
+                recording_icon(&base_icon(&handle))
+            } else {
+                base_icon(&handle)
+            };
+            let icon_ok = match tray.set_icon(Some(icon)) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!("tray icon update failed: {e}");
+                    false
+                }
+            };
+            let tooltip = if recording { "Ogma — recording" } else { "Ogma" };
+            let tooltip_ok = match tray.set_tooltip(Some(tooltip)) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!("tray tooltip update failed: {e}");
+                    false
+                }
+            };
+            indicated = icon_ok && tooltip_ok;
         } else {
-            base_icon(&app)
-        };
-        let _ = tray.set_icon(Some(icon));
-        let _ = tray.set_tooltip(Some(if recording { "Ogma — recording" } else { "Ogma" }));
+            tracing::warn!("tray icon not found; recording state not reflected");
+        }
+        if recording && !indicated {
+            show_main_window(&handle);
+        }
     });
     if let Err(e) = result {
         tracing::warn!("tray update failed: {e}");
+        if recording {
+            show_main_window(app);
+        }
     }
 }
 
@@ -101,8 +130,18 @@ fn base_icon(app: &AppHandle) -> Image<'static> {
 /// The app icon with a red "recording" dot in the bottom-right corner, drawn
 /// directly on the RGBA buffer to avoid an image-crate dependency.
 fn recording_icon(base: &Image<'_>) -> Image<'static> {
-    let (w, h) = (base.width() as i32, base.height() as i32);
     let mut rgba = base.rgba().to_vec();
+    draw_dot(&mut rgba, base.width(), base.height());
+    Image::new_owned(rgba, base.width(), base.height())
+}
+
+const DOT_RGBA: [u8; 4] = [0xE5, 0x3E, 0x3E, 0xFF];
+
+/// Paint the red disc into the bottom-right corner of a `w`×`h` RGBA buffer.
+/// Pure so the index arithmetic is unit-testable (a regression here would
+/// panic on the main thread mid-recording-start).
+fn draw_dot(rgba: &mut [u8], w: u32, h: u32) {
+    let (w, h) = (w as i32, h as i32);
     let r = (w.min(h) * 3 / 10).max(2);
     let (cx, cy) = (w - r - 1, h - r - 1);
     for y in (cy - r).max(0)..(cy + r + 1).min(h) {
@@ -110,9 +149,46 @@ fn recording_icon(base: &Image<'_>) -> Image<'static> {
             let (dx, dy) = (x - cx, y - cy);
             if dx * dx + dy * dy <= r * r {
                 let i = ((y * w + x) * 4) as usize;
-                rgba[i..i + 4].copy_from_slice(&[0xE5, 0x3E, 0x3E, 0xFF]);
+                rgba[i..i + 4].copy_from_slice(&DOT_RGBA);
             }
         }
     }
-    Image::new_owned(rgba, w as u32, h as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{draw_dot, DOT_RGBA};
+
+    fn buf(w: u32, h: u32) -> Vec<u8> {
+        vec![0u8; (w * h * 4) as usize]
+    }
+
+    #[test]
+    fn draw_dot_stays_in_bounds_on_degenerate_sizes() {
+        // 1x1 is the transparent-pixel fallback icon; the rest probe the
+        // clamp math around a radius larger than the buffer.
+        for (w, h) in [(1, 1), (2, 2), (1, 3), (3, 1), (4, 4)] {
+            let mut b = buf(w, h);
+            draw_dot(&mut b, w, h); // must not panic
+        }
+    }
+
+    #[test]
+    fn draw_dot_paints_bottom_right_and_leaves_top_left() {
+        let (w, h) = (32u32, 32u32);
+        let mut b = buf(w, h);
+        draw_dot(&mut b, w, h);
+        // Dot center (as computed by draw_dot) is red.
+        let r = (32i32 * 3 / 10).max(2);
+        let (cx, cy) = (32 - r - 1, 32 - r - 1);
+        let center = ((cy * 32 + cx) * 4) as usize;
+        assert_eq!(&b[center..center + 4], &DOT_RGBA);
+        // Rightmost pixel of the disc (cx + r, cy) is painted…
+        let edge = ((cy * 32 + cx + r) * 4) as usize;
+        assert_eq!(&b[edge..edge + 4], &DOT_RGBA);
+        // …and the disc never spills past the buffer edge (cx + r ≤ 31).
+        assert!(cx + r <= 31);
+        // Top-left stays untouched.
+        assert_eq!(&b[0..4], &[0, 0, 0, 0]);
+    }
 }
