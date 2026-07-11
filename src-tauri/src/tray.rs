@@ -15,11 +15,17 @@ const TRAY_ID: &str = "ogma-tray";
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app, false)?;
+    // On macOS the platform convention is that a left-click on a menu-bar icon
+    // opens its menu — so show it there and the Start/Stop/Open/Quit items are
+    // one click away. On Windows/Linux the convention is left-click opens the
+    // app and right-click shows the menu, so keep the menu off the left button
+    // and open the window instead (handled in on_tray_icon_event below).
+    let menu_on_left_click = cfg!(target_os = "macos");
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(base_icon(app))
         .tooltip("Ogma")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(menu_on_left_click)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray-toggle" => crate::toggle_recording(app.clone()),
             "tray-open" => show_main_window(app),
@@ -27,6 +33,11 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
+            // On macOS the left-click already opened the menu; don't also try to
+            // show the window (that would fight the menu and feel broken).
+            if cfg!(target_os = "macos") {
+                return;
+            }
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
