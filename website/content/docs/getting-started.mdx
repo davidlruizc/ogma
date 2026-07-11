@@ -3,7 +3,7 @@ title: Getting started
 description: Build Ogma from source and record your first meeting.
 ---
 
-Ogma is in alpha and does not ship installers yet — you build it from source. It currently supports **Windows**; macOS and iOS are planned.
+Ogma is in alpha. On **macOS** you can download a prebuilt `.dmg` from the [Releases page](https://github.com/davidlruizc/ogma/releases) (see [Installing on macOS](#installing-on-macos) below); on other platforms you build from source. iOS is planned.
 
 ## Prerequisites
 
@@ -28,6 +28,24 @@ For a release build:
 ```sh
 npm run tauri build
 ```
+
+## Installing on macOS
+
+Download `Ogma_<version>_aarch64.dmg` (Apple Silicon) from the [Releases page](https://github.com/davidlruizc/ogma/releases), open it, and drag **Ogma** to Applications.
+
+<Callout type="warn" title={`"Ogma is damaged and can't be opened"`}>
+  If macOS shows this on first launch, the download is **not** corrupted. These
+  alpha builds aren't yet notarized by Apple, so Gatekeeper blocks them — and
+  because it's the "damaged" variant, there's no **Open Anyway** button. Clear
+  the download quarantine flag once, from Terminal:
+
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/Ogma.app
+  ```
+
+  Then open Ogma normally. This is a temporary step until the release is signed
+  and notarized.
+</Callout>
 
 ## First launch checklist
 

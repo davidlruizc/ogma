@@ -44,6 +44,16 @@ npm install
 npm run tauri dev
 ```
 
+### Installing the macOS build
+
+Prebuilt Apple Silicon `.dmg` files are attached to each [GitHub Release](https://github.com/davidlruizc/ogma/releases). These alpha builds are **not yet notarized**, so on first launch macOS may say *"Ogma is damaged and can't be opened"* — the download is not actually corrupted, and there is no "Open Anyway" button for this message. Clear the quarantine flag once, then open normally:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Ogma.app
+```
+
+This step goes away once releases are signed and notarized.
+
 Tests: `cargo test -p ogma-core` (unit), plus `cargo test -p ogma-core --test recorder_integration -- --ignored` to exercise the real microphone.
 
 API keys (OpenAI, Anthropic, Notion) are entered in the app's settings page — nothing is hardcoded or committed.
