@@ -45,6 +45,8 @@ export const api = {
   /** Opens a native folder picker (Rust-side); resolves null if cancelled. */
   pickFolder: () => invoke<string | null>("pick_folder"),
 
+  getPlatform: () => invoke<string>("get_platform"),
+
   getSettings: () => invoke<Config>("get_settings"),
   saveSettings: (settings: Config) =>
     invoke<void>("save_settings", { settings }),

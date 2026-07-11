@@ -5,6 +5,8 @@
 //! enabled destination with no sync record, sync it — so a failing
 //! destination never blocks the others and retries only redo what's missing.
 
+#[cfg(target_os = "macos")]
+pub mod apple_notes;
 pub mod markdown;
 pub mod render;
 
@@ -48,6 +50,10 @@ pub fn enabled_destinations(config: &Config) -> Vec<Box<dyn SyncDestination>> {
             config.markdown_dir.trim(),
         )));
     }
+    #[cfg(target_os = "macos")]
+    if config.apple_notes_enabled {
+        out.push(Box::new(apple_notes::AppleNotesDestination));
+    }
     out
 }
 
@@ -68,6 +74,17 @@ mod tests {
         config.notion_database_id = "db".into();
         let ids: Vec<&str> = enabled_destinations(&config).iter().map(|d| d.id()).collect();
         assert_eq!(ids, vec!["notion", "markdown"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apple_notes_follows_toggle() {
+        let config = Config {
+            apple_notes_enabled: true,
+            ..Config::default()
+        };
+        let ids: Vec<&str> = enabled_destinations(&config).iter().map(|d| d.id()).collect();
+        assert_eq!(ids, vec!["apple_notes"]);
     }
 
     #[test]

@@ -23,6 +23,9 @@ pub struct Config {
     /// Folder the Markdown destination writes one `.md` per meeting into
     /// (e.g. an Obsidian vault folder). Empty = destination disabled.
     pub markdown_dir: String,
+    /// Create a note per meeting in Apple Notes (macOS only; the field
+    /// exists on every platform but only macOS builds act on it).
+    pub apple_notes_enabled: bool,
     pub notes_model: String,
     pub whisper_model: String,
     /// Optional language hint for Whisper (e.g. "en", "es"). Empty = auto.

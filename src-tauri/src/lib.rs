@@ -553,6 +553,13 @@ fn retry_pipeline(app: AppHandle, meeting_id: String) -> CmdResult<()> {
 
 // ── settings & notion ───────────────────────────────────────────────────────
 
+/// "macos" | "windows" | "linux" — lets the UI hide platform-only settings
+/// (the Apple Notes destination toggle).
+#[tauri::command]
+fn get_platform() -> &'static str {
+    std::env::consts::OS
+}
+
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> CmdResult<Config> {
     Ok(state.config.lock().unwrap().clone())
@@ -696,6 +703,7 @@ pub fn run() {
             import_audio_file,
             pick_folder,
             retry_pipeline,
+            get_platform,
             get_settings,
             save_settings,
             notion_setup
