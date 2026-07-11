@@ -42,6 +42,9 @@ export const api = {
   retryPipeline: (meetingId: string) =>
     invoke<void>("retry_pipeline", { meetingId }),
 
+  /** Opens a native folder picker (Rust-side); resolves null if cancelled. */
+  pickFolder: () => invoke<string | null>("pick_folder"),
+
   getSettings: () => invoke<Config>("get_settings"),
   saveSettings: (settings: Config) =>
     invoke<void>("save_settings", { settings }),

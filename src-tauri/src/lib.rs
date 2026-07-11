@@ -415,6 +415,27 @@ async fn import_audio_file(
     Ok(Some(id))
 }
 
+/// Native folder picker (Rust-side, same rationale as the import picker) for
+/// the Markdown destination folder in settings. `None` if cancelled.
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picker_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        picker_app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(err_str)?;
+    match picked {
+        Some(path) => {
+            let path = path.into_path().map_err(err_str)?;
+            Ok(Some(path.to_string_lossy().to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 // ── tray & global shortcut ──────────────────────────────────────────────────
 
 /// Start if idle, stop if recording — the tray/global-shortcut entry point.
@@ -673,6 +694,7 @@ pub fn run() {
             stop_recording,
             discard_recording,
             import_audio_file,
+            pick_folder,
             retry_pipeline,
             get_settings,
             save_settings,

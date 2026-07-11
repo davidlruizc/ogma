@@ -20,6 +20,9 @@ pub struct Config {
     /// Data-source/database that meeting pages get created in. Set via Notion
     /// setup (create) or pasted by the user (select existing).
     pub notion_database_id: String,
+    /// Folder the Markdown destination writes one `.md` per meeting into
+    /// (e.g. an Obsidian vault folder). Empty = destination disabled.
+    pub markdown_dir: String,
     pub notes_model: String,
     pub whisper_model: String,
     /// Optional language hint for Whisper (e.g. "en", "es"). Empty = auto.
