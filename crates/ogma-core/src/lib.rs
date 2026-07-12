@@ -10,6 +10,7 @@ pub mod pipeline;
 pub mod providers;
 pub mod recording;
 pub mod storage;
+pub mod sync;
 
 pub use config::Config;
 pub use error::{Error, Result};

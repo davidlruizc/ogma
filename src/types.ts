@@ -70,6 +70,7 @@ export interface Config {
   anthropic_api_key: string;
   notion_api_key: string;
   notion_database_id: string;
+  markdown_dir: string;
   notes_model: string;
   whisper_model: string;
   language: string;

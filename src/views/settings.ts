@@ -120,6 +120,27 @@ export function renderSettings(_navigate: Navigate): View {
       "leave empty to skip Notion sync",
       "Paste an existing Meetings database ID, or create one below.",
     );
+    // ── extra sync destinations ─────────────────────────────────────────────
+    const markdownDirInput = h("input", {
+      class: "field-input",
+      type: "text",
+      value: config.markdown_dir,
+      placeholder: "leave empty to disable",
+      spellcheck: false,
+    });
+    const browseBtn = h("button", { class: "pill" }, "BROWSE…");
+    browseBtn.addEventListener("click", async () => {
+      browseBtn.disabled = true;
+      try {
+        const dir = await api.pickFolder();
+        if (dir) markdownDirInput.value = dir;
+      } catch (e) {
+        toast(errorMessage(e), "error");
+      } finally {
+        browseBtn.disabled = false;
+      }
+    });
+
     const notesModel = field("Notes model", config.notes_model, "claude-sonnet-5");
     const whisperModel = field("Transcription model", config.whisper_model, "whisper-1");
     const language = field("Language hint", config.language, "auto-detect", "Optional ISO code like en, es — helps Whisper with accents.");
@@ -130,6 +151,7 @@ export function renderSettings(_navigate: Navigate): View {
         anthropic_api_key: anthropic.input.value.trim(),
         notion_api_key: notion.input.value.trim(),
         notion_database_id: extractNotionId(notionDb.input.value),
+        markdown_dir: markdownDirInput.value.trim(),
         notes_model: notesModel.input.value.trim(),
         whisper_model: whisperModel.input.value.trim(),
         language: language.input.value.trim(),
@@ -232,6 +254,24 @@ export function renderSettings(_navigate: Navigate): View {
             "span",
             { class: "field-hint" },
             "Share a Notion page with your integration, paste its URL here, and Ogma creates a Meetings database inside it.",
+          ),
+        ),
+      ),
+
+      // extra sync destinations
+      h(
+        "div",
+        { class: "card settings-card" },
+        h("div", { class: "section-label" }, "DESTINATIONS — beyond Notion"),
+        h(
+          "div",
+          { class: "field" },
+          h("span", { class: "field-label" }, "Markdown / Obsidian folder"),
+          h("div", { class: "field-row" }, markdownDirInput, browseBtn),
+          h(
+            "span",
+            { class: "field-hint" },
+            "Each processed meeting is written as a .md file with YAML frontmatter — point this at an Obsidian vault folder to get meetings in your vault.",
           ),
         ),
       ),

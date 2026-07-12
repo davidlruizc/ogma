@@ -56,8 +56,15 @@ impl Storage {
                 duration_ms    INTEGER NOT NULL DEFAULT 0,
                 status         TEXT NOT NULL,
                 error          TEXT,
-                audio_dir      TEXT NOT NULL,
-                notion_page_id TEXT
+                audio_dir      TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_syncs (
+                meeting_id   TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                destination  TEXT NOT NULL,
+                external_ref TEXT NOT NULL,
+                synced_at    TEXT NOT NULL,
+                PRIMARY KEY (meeting_id, destination)
             );
 
             CREATE TABLE IF NOT EXISTS transcript_segments (
@@ -93,15 +100,41 @@ impl Storage {
             );
             "#,
         )?;
+        self.migrate_notion_page_id()?;
+        Ok(())
+    }
+
+    /// Legacy schema (pre-`meeting_syncs`) kept the Notion page id as a
+    /// column on `meetings`. Move those values into `meeting_syncs` (as
+    /// destination "notion") and drop the column. Fresh databases never had
+    /// the column, so this is a no-op for them.
+    fn migrate_notion_page_id(&self) -> Result<()> {
+        let has_column = self
+            .conn
+            .prepare("SELECT 1 FROM pragma_table_info('meetings') WHERE name = 'notion_page_id'")?
+            .exists([])?;
+        if !has_column {
+            return Ok(());
+        }
+        self.conn.execute_batch(
+            r#"
+            INSERT OR IGNORE INTO meeting_syncs (meeting_id, destination, external_ref, synced_at)
+                SELECT id, 'notion', notion_page_id, created_at
+                FROM meetings WHERE notion_page_id IS NOT NULL;
+            ALTER TABLE meetings DROP COLUMN notion_page_id;
+            "#,
+        )?;
         Ok(())
     }
 
     // ── meetings ────────────────────────────────────────────────────────────
 
+    /// `notion_page_id` on the passed meeting is ignored — it is derived
+    /// from `meeting_syncs` on read and recorded via `record_sync`.
     pub fn create_meeting(&self, meeting: &Meeting) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO meetings (id, title, created_at, duration_ms, status, error, audio_dir, notion_page_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO meetings (id, title, created_at, duration_ms, status, error, audio_dir)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 meeting.id,
                 meeting.title,
@@ -110,17 +143,15 @@ impl Storage {
                 meeting.status.as_str(),
                 meeting.error,
                 meeting.audio_dir,
-                meeting.notion_page_id,
             ],
         )?;
         Ok(())
     }
 
     pub fn list_meetings(&self) -> Result<Vec<Meeting>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, created_at, duration_ms, status, error, audio_dir, notion_page_id
-             FROM meetings ORDER BY created_at DESC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("{MEETING_SELECT} ORDER BY created_at DESC"))?;
         let rows = stmt.query_map([], row_to_meeting)?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -128,8 +159,7 @@ impl Storage {
     pub fn get_meeting(&self, id: &str) -> Result<Meeting> {
         self.conn
             .query_row(
-                "SELECT id, title, created_at, duration_ms, status, error, audio_dir, notion_page_id
-                 FROM meetings WHERE id = ?1",
+                &format!("{MEETING_SELECT} WHERE id = ?1"),
                 [id],
                 row_to_meeting,
             )
@@ -138,10 +168,9 @@ impl Storage {
     }
 
     pub fn meetings_with_status(&self, status: MeetingStatus) -> Result<Vec<Meeting>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, created_at, duration_ms, status, error, audio_dir, notion_page_id
-             FROM meetings WHERE status = ?1 ORDER BY created_at DESC",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "{MEETING_SELECT} WHERE status = ?1 ORDER BY created_at DESC"
+        ))?;
         let rows = stmt.query_map([status.as_str()], row_to_meeting)?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -173,12 +202,34 @@ impl Storage {
         Ok(())
     }
 
-    pub fn set_notion_page(&self, id: &str, page_id: &str) -> Result<()> {
+    // ── sync records ────────────────────────────────────────────────────────
+
+    /// Record a completed sync to one destination (upsert: a forced re-sync
+    /// refreshes the ref and timestamp).
+    pub fn record_sync(&self, meeting_id: &str, destination: &str, external_ref: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE meetings SET notion_page_id = ?2 WHERE id = ?1",
-            params![id, page_id],
+            "INSERT INTO meeting_syncs (meeting_id, destination, external_ref, synced_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(meeting_id, destination) DO UPDATE
+                 SET external_ref = excluded.external_ref, synced_at = excluded.synced_at",
+            params![
+                meeting_id,
+                destination,
+                external_ref,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )?;
         Ok(())
+    }
+
+    /// Destination ids that already have a sync record for this meeting —
+    /// the pipeline syncs every enabled destination not in this list.
+    pub fn synced_destinations(&self, meeting_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT destination FROM meeting_syncs WHERE meeting_id = ?1")?;
+        let rows = stmt.query_map([meeting_id], |row| row.get(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     pub fn delete_meeting(&self, id: &str) -> Result<()> {
@@ -381,6 +432,13 @@ impl Storage {
     }
 }
 
+/// Meeting rows carry a derived `notion_page_id` (the Notion sync record's
+/// external ref) so the UI's "synced to Notion" link keeps working.
+const MEETING_SELECT: &str = "SELECT id, title, created_at, duration_ms, status, error, audio_dir,
+    (SELECT external_ref FROM meeting_syncs s
+     WHERE s.meeting_id = meetings.id AND s.destination = 'notion')
+ FROM meetings";
+
 fn row_to_meeting(row: &rusqlite::Row) -> rusqlite::Result<Meeting> {
     let status: String = row.get(4)?;
     Ok(Meeting {
@@ -508,9 +566,85 @@ mod tests {
         let mut s = Storage::open_in_memory().unwrap();
         s.create_meeting(&meeting("m1")).unwrap();
         s.replace_segments("m1", &[seg("A", 0, "hello world")]).unwrap();
+        s.record_sync("m1", "markdown", "/vault/m1.md").unwrap();
         s.delete_meeting("m1").unwrap();
         assert!(s.get_meeting("m1").is_err());
         assert!(s.get_segments("m1").unwrap().is_empty());
         assert!(s.search_transcript("hello", 10).unwrap().is_empty());
+        assert!(s.synced_destinations("m1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn sync_records_round_trip_and_derive_notion_page_id() {
+        let s = Storage::open_in_memory().unwrap();
+        s.create_meeting(&meeting("m1")).unwrap();
+        assert!(s.get_meeting("m1").unwrap().notion_page_id.is_none());
+
+        s.record_sync("m1", "markdown", "/vault/m1.md").unwrap();
+        s.record_sync("m1", "notion", "page-123").unwrap();
+        let mut synced = s.synced_destinations("m1").unwrap();
+        synced.sort();
+        assert_eq!(synced, vec!["markdown", "notion"]);
+
+        // The Notion record surfaces as the meeting's derived notion_page_id.
+        assert_eq!(
+            s.get_meeting("m1").unwrap().notion_page_id.as_deref(),
+            Some("page-123")
+        );
+        assert_eq!(
+            s.list_meetings().unwrap()[0].notion_page_id.as_deref(),
+            Some("page-123")
+        );
+
+        // Upsert: re-recording the same destination replaces the ref.
+        s.record_sync("m1", "notion", "page-456").unwrap();
+        assert_eq!(
+            s.get_meeting("m1").unwrap().notion_page_id.as_deref(),
+            Some("page-456")
+        );
+    }
+
+    /// A database created by a pre-`meeting_syncs` Ogma carries the Notion
+    /// page id as a `meetings` column; opening it must move those values into
+    /// `meeting_syncs` and drop the column, losing nothing.
+    #[test]
+    fn migrates_legacy_notion_page_id_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("ogma.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE meetings (
+                    id             TEXT PRIMARY KEY,
+                    title          TEXT NOT NULL,
+                    created_at     TEXT NOT NULL,
+                    duration_ms    INTEGER NOT NULL DEFAULT 0,
+                    status         TEXT NOT NULL,
+                    error          TEXT,
+                    audio_dir      TEXT NOT NULL,
+                    notion_page_id TEXT
+                );
+                INSERT INTO meetings VALUES
+                    ('m1', 'Synced', '2026-07-01T10:00:00Z', 0, 'done', NULL, '/d/m1', 'page-legacy'),
+                    ('m2', 'Unsynced', '2026-07-02T10:00:00Z', 0, 'done', NULL, '/d/m2', NULL);
+                "#,
+            )
+            .unwrap();
+        }
+
+        let s = Storage::open(&db_path).unwrap();
+        assert_eq!(
+            s.get_meeting("m1").unwrap().notion_page_id.as_deref(),
+            Some("page-legacy")
+        );
+        assert_eq!(s.synced_destinations("m1").unwrap(), vec!["notion"]);
+        assert!(s.get_meeting("m2").unwrap().notion_page_id.is_none());
+        assert!(s.synced_destinations("m2").unwrap().is_empty());
+
+        // Reopening (migration already applied) must be a clean no-op.
+        drop(s);
+        let s = Storage::open(&db_path).unwrap();
+        assert_eq!(s.synced_destinations("m1").unwrap(), vec!["notion"]);
     }
 }

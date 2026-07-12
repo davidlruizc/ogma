@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 use crate::error::{Error, Result};
 use crate::models::{Meeting, MeetingNotes, TranscriptSegment};
 use crate::providers::with_retries;
+use crate::sync::render::format_ms;
+use crate::sync::SyncDestination;
 
 const API: &str = "https://api.notion.com/v1";
 const NOTION_VERSION: &str = "2022-06-28";
@@ -255,6 +257,26 @@ impl NotionClient {
     }
 }
 
+#[async_trait::async_trait]
+impl SyncDestination for NotionClient {
+    fn id(&self) -> &'static str {
+        "notion"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Notion"
+    }
+
+    async fn sync(
+        &self,
+        meeting: &Meeting,
+        notes: &MeetingNotes,
+        segments: &[TranscriptSegment],
+    ) -> Result<String> {
+        self.create_meeting_page(meeting, notes, segments).await
+    }
+}
+
 /// Distinct speaker labels in first-seen order, dropping the unlabeled
 /// sentinel. Notion multi_select option names can't contain commas, so those
 /// are swapped for spaces.
@@ -388,18 +410,6 @@ fn split_text(s: &str, max_chars: usize) -> Vec<String> {
         .collect()
 }
 
-fn format_ms(ms: i64) -> String {
-    let total_secs = ms / 1000;
-    let h = total_secs / 3600;
-    let m = (total_secs % 3600) / 60;
-    let s = total_secs % 60;
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,12 +420,6 @@ mod tests {
         let pieces = split_text(&s, 1900);
         assert_eq!(pieces.len(), 3);
         assert!(pieces.iter().all(|p| p.chars().count() <= 1900));
-    }
-
-    #[test]
-    fn format_ms_variants() {
-        assert_eq!(format_ms(65_000), "1:05");
-        assert_eq!(format_ms(3_725_000), "1:02:05");
     }
 
     #[test]
