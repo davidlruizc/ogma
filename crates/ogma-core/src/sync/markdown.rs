@@ -40,20 +40,28 @@ impl SyncDestination for MarkdownDestination {
         let content = render_markdown(meeting, notes, segments);
         let path = self.dir.join(file_name(meeting));
         tokio::fs::create_dir_all(&self.dir).await?;
-        // Overwrite is safe: the name embeds the meeting's start minute, so
-        // only a retry of the same meeting ever hits an existing file.
+        // Overwrite is safe: the name embeds the meeting id, so a distinct
+        // meeting never maps to this path — the only writer that can hit an
+        // existing file is a retry of this same meeting, making the write an
+        // idempotent rewrite rather than clobbering another meeting's note.
         tokio::fs::write(&path, content).await?;
         Ok(path.to_string_lossy().to_string())
     }
 }
 
-/// `YYYY-MM-DD HH.MM <title>.md` — sortable, readable in a vault, and
-/// collision-free across meetings (two meetings can't share a start minute).
+/// `YYYY-MM-DD HH.MM <title> <id8>.md` — sortable and readable in a vault,
+/// and collision-free across meetings: the 8-char meeting-id suffix means two
+/// meetings never share a path even if they were created in the same minute
+/// with the same title, while a retry of the *same* meeting maps back to the
+/// same file (so `sync`'s overwrite is a true idempotent rewrite). On an
+/// unparseable date the id8 alone stamps the name, so it stays unique too.
 fn file_name(meeting: &Meeting) -> String {
-    let stamp = chrono::DateTime::parse_from_rfc3339(&meeting.created_at)
-        .map(|dt| dt.format("%Y-%m-%d %H.%M").to_string())
-        .unwrap_or_else(|_| meeting.id.chars().take(8).collect());
-    format!("{stamp} {}.md", sanitize_title(&meeting.title))
+    let id8: String = meeting.id.chars().take(8).collect();
+    let title = sanitize_title(&meeting.title);
+    match chrono::DateTime::parse_from_rfc3339(&meeting.created_at) {
+        Ok(dt) => format!("{} {title} {id8}.md", dt.format("%Y-%m-%d %H.%M")),
+        Err(_) => format!("{id8} {title}.md"),
+    }
 }
 
 /// Strip filesystem-hostile characters and cap the length; never empty.
@@ -132,7 +140,10 @@ mod tests {
     fn file_name_is_stamped_and_sanitized() {
         let mut m = meeting();
         m.title = "Q3: budget / planning?".into();
-        assert_eq!(file_name(&m), "2026-07-09 14.32 Q3 budget planning.md");
+        assert_eq!(
+            file_name(&m),
+            "2026-07-09 14.32 Q3 budget planning abcdef12.md"
+        );
     }
 
     #[test]
@@ -140,6 +151,20 @@ mod tests {
         let mut m = meeting();
         m.created_at = "not a date".into();
         assert_eq!(file_name(&m), "abcdef12 Weekly planning.md");
+    }
+
+    #[test]
+    fn file_name_disambiguates_same_minute_same_title() {
+        // Two distinct meetings created in the same minute with the same
+        // title must not resolve to the same file (else the second sync
+        // would silently clobber the first).
+        let mut a = meeting();
+        let mut b = meeting();
+        a.id = "aaaaaaaa-0000-0000-0000-000000000000".into();
+        b.id = "bbbbbbbb-1111-1111-1111-111111111111".into();
+        assert_ne!(file_name(&a), file_name(&b));
+        // …but the same meeting always maps to the same file (idempotent).
+        assert_eq!(file_name(&a), file_name(&a));
     }
 
     #[test]

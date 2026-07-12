@@ -186,10 +186,24 @@ impl Pipeline {
     /// failed; successes are recorded immediately, so a retry redoes only the
     /// failed ones. Any failure still fails the run (→ status Error + Retry).
     async fn sync_destinations(&self, meeting_id: &str) -> Result<()> {
+        self.sync_to(meeting_id, sync::enabled_destinations(&self.config))
+            .await
+    }
+
+    /// The fan-out core of `sync_destinations`, split out so tests can drive
+    /// it with fake destinations instead of the config-derived real ones. It
+    /// syncs only the destinations with no existing record, records each
+    /// success immediately (before any later failure), and aggregates any
+    /// failures into a single error.
+    async fn sync_to(
+        &self,
+        meeting_id: &str,
+        destinations: Vec<Box<dyn sync::SyncDestination>>,
+    ) -> Result<()> {
         let pending = {
             let storage = self.storage.lock().unwrap();
             let synced = storage.synced_destinations(meeting_id)?;
-            let mut destinations = sync::enabled_destinations(&self.config);
+            let mut destinations = destinations;
             destinations.retain(|d| !synced.iter().any(|s| s == d.id()));
             destinations
         };
@@ -301,5 +315,170 @@ mod tests {
         let offsets: Vec<i64> = chunks.iter().map(|c| c.offset_ms).collect();
         // 0, then 1000ms after seg0, then 1500ms after the short seg1.
         assert_eq!(offsets, vec![0, 1000, 1500]);
+    }
+
+    // ── sync fan-out (partial failure + resume) ─────────────────────────────
+
+    use crate::models::{Meeting, MeetingStatus};
+    use crate::sync::render::tests::{sample_notes, sample_segments};
+    use crate::sync::SyncDestination;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A destination that records how many times it was synced and either
+    /// succeeds (returning a ref) or fails, on command.
+    struct FakeDest {
+        id: &'static str,
+        fail: bool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl SyncDestination for FakeDest {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn display_name(&self) -> &'static str {
+            self.id
+        }
+        async fn sync(
+            &self,
+            _meeting: &Meeting,
+            _notes: &crate::models::MeetingNotes,
+            _segments: &[crate::models::TranscriptSegment],
+        ) -> Result<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                Err(Error::Other(format!("{} boom", self.id)))
+            } else {
+                Ok(format!("ref-{}", self.id))
+            }
+        }
+    }
+
+    /// A pipeline over an in-memory meeting that already has notes + segments,
+    /// i.e. parked exactly at the sync stage.
+    fn pipeline_ready_to_sync() -> Pipeline {
+        let mut storage = Storage::open_in_memory().unwrap();
+        storage
+            .create_meeting(&Meeting {
+                id: "m1".into(),
+                title: "Weekly planning".into(),
+                created_at: "2026-07-09T14:32:00Z".into(),
+                duration_ms: 0,
+                status: MeetingStatus::Summarizing,
+                error: None,
+                audio_dir: "/data/m1".into(),
+                notion_page_id: None,
+            })
+            .unwrap();
+        storage.replace_segments("m1", &sample_segments()).unwrap();
+        storage.save_notes("m1", &sample_notes()).unwrap();
+        Pipeline::new(
+            Arc::new(Mutex::new(storage)),
+            Config::default(),
+            Arc::new(|_| {}),
+        )
+    }
+
+    fn synced(pipeline: &Pipeline) -> Vec<String> {
+        let mut ids = pipeline
+            .storage
+            .lock()
+            .unwrap()
+            .synced_destinations("m1")
+            .unwrap();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn partial_failure_records_success_and_retry_redoes_only_the_failure() {
+        let pipeline = pipeline_ready_to_sync();
+        let good_calls = Arc::new(AtomicUsize::new(0));
+        let bad_calls = Arc::new(AtomicUsize::new(0));
+
+        // Round 1: "good" succeeds, "bad" fails → the run fails, but "good"
+        // is already recorded (success is committed before the later failure).
+        let err = pipeline
+            .sync_to(
+                "m1",
+                vec![
+                    Box::new(FakeDest {
+                        id: "good",
+                        fail: false,
+                        calls: good_calls.clone(),
+                    }),
+                    Box::new(FakeDest {
+                        id: "bad",
+                        fail: true,
+                        calls: bad_calls.clone(),
+                    }),
+                ],
+            )
+            .await;
+        assert!(err.is_err());
+        assert_eq!(good_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(bad_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(synced(&pipeline), vec!["good"]);
+
+        // Round 2 (retry): "good" must be skipped (already synced), only "bad"
+        // — which now succeeds — is re-attempted.
+        let good2 = Arc::new(AtomicUsize::new(0));
+        let bad2 = Arc::new(AtomicUsize::new(0));
+        pipeline
+            .sync_to(
+                "m1",
+                vec![
+                    Box::new(FakeDest {
+                        id: "good",
+                        fail: false,
+                        calls: good2.clone(),
+                    }),
+                    Box::new(FakeDest {
+                        id: "bad",
+                        fail: false,
+                        calls: bad2.clone(),
+                    }),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(good2.load(Ordering::SeqCst), 0, "already-synced dest re-run");
+        assert_eq!(bad2.load(Ordering::SeqCst), 1);
+        assert_eq!(synced(&pipeline), vec!["bad", "good"]);
+    }
+
+    #[tokio::test]
+    async fn multiple_failures_aggregate_into_one_error() {
+        let pipeline = pipeline_ready_to_sync();
+        let err = pipeline
+            .sync_to(
+                "m1",
+                vec![
+                    Box::new(FakeDest {
+                        id: "one",
+                        fail: true,
+                        calls: Arc::new(AtomicUsize::new(0)),
+                    }),
+                    Box::new(FakeDest {
+                        id: "two",
+                        fail: true,
+                        calls: Arc::new(AtomicUsize::new(0)),
+                    }),
+                ],
+            )
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("one"), "aggregate error names all failures: {msg}");
+        assert!(msg.contains("two"), "aggregate error names all failures: {msg}");
+        assert!(synced(&pipeline).is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_pending_destinations_is_a_noop() {
+        let pipeline = pipeline_ready_to_sync();
+        pipeline.sync_to("m1", vec![]).await.unwrap();
+        assert!(synced(&pipeline).is_empty());
     }
 }
