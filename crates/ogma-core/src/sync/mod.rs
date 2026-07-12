@@ -5,7 +5,9 @@
 //! enabled destination with no sync record, sync it — so a failing
 //! destination never blocks the others and retries only redo what's missing.
 
-#[cfg(target_os = "macos")]
+// Compiles on every platform (the osascript code is inert off-macOS) so its
+// pure rendering/output-parsing logic stays unit-testable everywhere; it is
+// only *enabled* on macOS via `enabled_destinations` below.
 pub mod apple_notes;
 pub mod markdown;
 pub mod render;

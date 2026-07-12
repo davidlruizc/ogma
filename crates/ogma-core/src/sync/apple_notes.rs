@@ -7,7 +7,10 @@
 //! denial surfaces as a settings-hint error, not a silent failure.
 //!
 //! AppleScript doesn't exist on iOS, so this destination is macOS-only by
-//! nature (`#[cfg(target_os = "macos")]` in `sync/mod.rs`).
+//! nature — `enabled_destinations` only turns it on under
+//! `#[cfg(target_os = "macos")]`. The module itself still compiles on every
+//! platform (the osascript call is simply never reached off-macOS) so its
+//! pure HTML-render and output-parsing logic stays unit-testable everywhere.
 
 use crate::error::{Error, Result};
 use crate::models::{Meeting, MeetingNotes, TranscriptSegment};
@@ -60,27 +63,32 @@ impl SyncDestination for AppleNotesDestination {
         .await
         .map_err(|e| Error::Other(format!("osascript task failed: {e}")))??;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // -1743 = errAEEventNotPermitted: the user declined the one-time
-            // Automation prompt (or it was revoked in System Settings).
-            let hint = if stderr.contains("-1743") {
-                " — allow Ogma to control Notes in System Settings → Privacy & Security → Automation"
-            } else {
-                ""
-            };
-            return Err(Error::Other(format!(
-                "Apple Notes sync failed: {stderr}{hint}"
-            )));
-        }
-        let note_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if note_id.is_empty() {
-            return Err(Error::Other(
-                "Apple Notes sync returned no note id".into(),
-            ));
-        }
-        Ok(note_id)
+        interpret(output.status.success(), &output.stdout, &output.stderr)
     }
+}
+
+/// Map an `osascript` invocation's outcome to the created note's id, or a
+/// descriptive error — with an Automation-permission hint when macOS reports
+/// the Apple-event was blocked. Split out of `sync` as a pure function so its
+/// three branches are unit-testable without invoking osascript or tripping the
+/// one-time Automation prompt.
+fn interpret(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<String> {
+    if !success {
+        let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+        // -1743 = errAEEventNotPermitted: the user declined the one-time
+        // Automation prompt (or it was revoked in System Settings).
+        let hint = if stderr.contains("-1743") {
+            " — allow Ogma to control Notes in System Settings → Privacy & Security → Automation"
+        } else {
+            ""
+        };
+        return Err(Error::Other(format!("Apple Notes sync failed: {stderr}{hint}")));
+    }
+    let note_id = String::from_utf8_lossy(stdout).trim().to_string();
+    if note_id.is_empty() {
+        return Err(Error::Other("Apple Notes sync returned no note id".into()));
+    }
+    Ok(note_id)
 }
 
 /// The note's HTML body. Notes takes the first line as the note title, so it
@@ -145,6 +153,44 @@ mod tests {
     fn friendly_date_falls_back_to_raw() {
         assert_eq!(friendly_date("2026-07-09T14:32:00+02:00"), "2026-07-09 14:32");
         assert_eq!(friendly_date("garbage"), "garbage");
+    }
+
+    #[test]
+    fn interpret_returns_trimmed_note_id_on_success() {
+        assert_eq!(
+            interpret(true, b"x-coredata://note/42\n", b"").unwrap(),
+            "x-coredata://note/42"
+        );
+    }
+
+    #[test]
+    fn interpret_empty_stdout_on_success_is_an_error() {
+        // osascript exited 0 but printed no id — surface it, don't record a
+        // bogus empty external_ref.
+        let err = interpret(true, b"  \n", b"").unwrap_err().to_string();
+        assert!(err.contains("no note id"), "{err}");
+    }
+
+    #[test]
+    fn interpret_permission_denial_adds_the_automation_hint() {
+        let err = interpret(
+            false,
+            b"",
+            b"execution error: Not authorized to send Apple events to Notes. (-1743)",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("-1743"), "{err}");
+        assert!(err.contains("Automation"), "{err}");
+    }
+
+    #[test]
+    fn interpret_other_failure_has_no_hint() {
+        let err = interpret(false, b"", b"execution error: Notes got an error (-2700)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("-2700"), "{err}");
+        assert!(!err.contains("Automation"), "{err}");
     }
 
     /// Real end-to-end check on a Mac: creates an actual note in Apple Notes
