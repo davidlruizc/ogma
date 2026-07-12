@@ -28,7 +28,7 @@ Phases 1–3 implemented (Windows desktop) and **verified end-to-end against the
 
 ## Layout
 
-- `crates/ogma-core/` — everything that matters: `recording/` (cpal capture → 16kHz mono, crash-safe rotating WAV segments with header `repair()`, wake lock), `storage.rs` (rusqlite + FTS5), `providers/` (`whisper.rs`, `claude.rs` behind traits), `pipeline.rs` (idempotent orchestrator, resume point derived from stored data), `sync/` (`SyncDestination` trait, shared render blocks, Markdown/Obsidian destination; `notion.rs` implements the trait too), `mcp.rs`, `config.rs`
+- `crates/ogma-core/` — everything that matters: `recording/` (cpal capture → 16kHz mono, crash-safe rotating WAV segments with header `repair()`, wake lock), `storage.rs` (rusqlite + FTS5), `providers/` (`whisper.rs`, `claude.rs` behind traits), `pipeline.rs` (idempotent orchestrator, resume point derived from stored data), `sync/` (`SyncDestination` trait, shared render blocks, Markdown/Obsidian destination, Apple Notes via `osascript` on macOS only; `notion.rs` implements the trait too), `mcp.rs`, `config.rs`
 - `src-tauri/` — thin Tauri layer: commands/events in `lib.rs`, `--mcp` branch in `main.rs`
 - `src/` — vanilla TS frontend: `api.ts` (typed invoke wrappers), `views/` (home/detail/settings); events re-dispatched as `ogma:*` CustomEvents
 

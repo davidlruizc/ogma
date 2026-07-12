@@ -64,6 +64,13 @@ export function renderSettings(_navigate: Navigate): View {
       devices = [];
     }
 
+    let platform = "";
+    try {
+      platform = await api.getPlatform();
+    } catch {
+      platform = "";
+    }
+
     // ── input device (radio list) ───────────────────────────────────────────
     let selectedDevice = config.input_device;
     const deviceList = h("div", { class: "device-list" });
@@ -141,6 +148,42 @@ export function renderSettings(_navigate: Navigate): View {
       }
     });
 
+    // Apple Notes toggle — macOS only (AppleScript doesn't exist elsewhere).
+    let appleNotesEnabled = config.apple_notes_enabled;
+    const appleNotesRow = h("div", { class: "device-list" });
+    function paintAppleNotes() {
+      appleNotesRow.replaceChildren(
+        h(
+          "div",
+          {
+            class: `device-row ${appleNotesEnabled ? "selected" : ""}`,
+            onclick: () => {
+              appleNotesEnabled = !appleNotesEnabled;
+              paintAppleNotes();
+            },
+          },
+          h("span", { class: "device-radio" }),
+          h(
+            "div",
+            { class: "device-main" },
+            h("span", { class: "device-label" }, "Apple Notes"),
+            h(
+              "span",
+              { class: "device-sub" },
+              "one note per meeting in an “Ogma” folder · reaches iPhone via iCloud · macOS asks for permission on first sync",
+            ),
+          ),
+          h(
+            "span",
+            { class: `key-valid ${appleNotesEnabled ? "" : "off"}` },
+            h("span", { class: `status-dot ${appleNotesEnabled ? "ok" : "muted"}` }),
+            appleNotesEnabled ? "enabled" : "off",
+          ),
+        ),
+      );
+    }
+    paintAppleNotes();
+
     const notesModel = field("Notes model", config.notes_model, "claude-sonnet-5");
     const whisperModel = field("Transcription model", config.whisper_model, "whisper-1");
     const language = field("Language hint", config.language, "auto-detect", "Optional ISO code like en, es — helps Whisper with accents.");
@@ -152,6 +195,7 @@ export function renderSettings(_navigate: Navigate): View {
         notion_api_key: notion.input.value.trim(),
         notion_database_id: extractNotionId(notionDb.input.value),
         markdown_dir: markdownDirInput.value.trim(),
+        apple_notes_enabled: appleNotesEnabled,
         notes_model: notesModel.input.value.trim(),
         whisper_model: whisperModel.input.value.trim(),
         language: language.input.value.trim(),
@@ -274,6 +318,7 @@ export function renderSettings(_navigate: Navigate): View {
             "Each processed meeting is written as a .md file with YAML frontmatter — point this at an Obsidian vault folder to get meetings in your vault.",
           ),
         ),
+        platform === "macos" ? appleNotesRow : null,
       ),
 
       // models

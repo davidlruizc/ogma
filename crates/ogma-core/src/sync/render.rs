@@ -136,6 +136,67 @@ pub fn blocks_to_markdown(blocks: &[Block]) -> String {
     collapse_list_gaps(&out)
 }
 
+/// Render blocks as simple HTML (the subset Apple Notes accepts: div, h2,
+/// b, i, ul/li, br). Consecutive bullets/todos are grouped into one list.
+pub fn blocks_to_html(blocks: &[Block]) -> String {
+    let mut out = String::new();
+    let mut in_list = false;
+    let close_list = |out: &mut String, in_list: &mut bool| {
+        if *in_list {
+            out.push_str("</ul>\n");
+            *in_list = false;
+        }
+    };
+    for block in blocks {
+        match block {
+            Block::Bullet(text) | Block::Todo(text) => {
+                if !in_list {
+                    out.push_str("<ul>\n");
+                    in_list = true;
+                }
+                let marker = if matches!(block, Block::Todo(_)) { "☐ " } else { "" };
+                out.push_str(&format!("<li>{marker}{}</li>\n", html_escape(text)));
+            }
+            Block::Callout(text) => {
+                close_list(&mut out, &mut in_list);
+                out.push_str(&format!(
+                    "<div><b>TL;DR:</b> {}</div>\n",
+                    html_escape(text)
+                ));
+            }
+            Block::Heading(text) => {
+                close_list(&mut out, &mut in_list);
+                out.push_str(&format!("<h2>{}</h2>\n", html_escape(text)));
+            }
+            Block::Paragraph(text) => {
+                close_list(&mut out, &mut in_list);
+                out.push_str(&format!("<div>{}</div>\n", html_escape(text)));
+            }
+            Block::Quote(text) => {
+                close_list(&mut out, &mut in_list);
+                out.push_str(&format!("<div><i>{}</i></div>\n", html_escape(text)));
+            }
+            Block::Utterance { speaker, stamp, text } => {
+                close_list(&mut out, &mut in_list);
+                out.push_str(&format!(
+                    "<div><b>{} ({stamp}):</b> {}</div>\n",
+                    html_escape(speaker),
+                    html_escape(text)
+                ));
+            }
+        }
+    }
+    close_list(&mut out, &mut in_list);
+    out
+}
+
+pub fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Remove the blank line between consecutive list items so they render as
 /// one list; everything else keeps its paragraph spacing.
 fn collapse_list_gaps(md: &str) -> String {
@@ -267,6 +328,31 @@ pub(crate) mod tests {
         ];
         let md = blocks_to_markdown(&blocks);
         assert!(md.contains("- one\n- two\n\n## Next"));
+    }
+
+    #[test]
+    fn html_covers_all_sections_and_escapes() {
+        let mut notes = sample_notes();
+        notes.tldr = "Ship <v1> & more".into();
+        let html = blocks_to_html(&note_blocks(&notes, &sample_segments()));
+        assert!(html.contains("<div><b>TL;DR:</b> Ship &lt;v1&gt; &amp; more</div>"));
+        assert!(html.contains("<h2>Summary</h2>"));
+        assert!(html.contains("<ul>\n<li>Point one</li>\n</ul>"));
+        assert!(html.contains("<li>☐ Write the release notes — Maria (due 2026-07-15)</li>"));
+        assert!(html.contains("<div><i>\u{201c}This is the one\u{201d} — Tom (1:05)</i></div>"));
+        assert!(html.contains("<div><b>Maria (0:00):</b> Let's get started.</div>"));
+        assert!(!html.contains("<ul>\n</ul>"));
+    }
+
+    #[test]
+    fn html_groups_consecutive_list_items() {
+        let blocks = vec![
+            Block::Bullet("one".into()),
+            Block::Bullet("two".into()),
+            Block::Paragraph("after".into()),
+        ];
+        let html = blocks_to_html(&blocks);
+        assert!(html.contains("<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n<div>after</div>"));
     }
 
     #[test]

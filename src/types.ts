@@ -71,6 +71,7 @@ export interface Config {
   notion_api_key: string;
   notion_database_id: string;
   markdown_dir: string;
+  apple_notes_enabled: boolean;
   notes_model: string;
   whisper_model: string;
   language: string;
