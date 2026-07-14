@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { appName, gitConfig, siteDescription, siteUrl } from '@/lib/shared';
 import { AppDemo } from './app-demo';
 
@@ -101,7 +102,7 @@ export default function HomePage() {
         <div className="lp-nav-links">
           <a href="#features">FEATURES</a>
           <a href="#download">DOWNLOAD</a>
-          <a href="/docs">DOCS</a>
+          <Link href="/docs">DOCS</Link>
           <a href={repoUrl} target="_blank" rel="noreferrer">
             GITHUB
           </a>

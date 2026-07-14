@@ -37,7 +37,12 @@ export function AppDemo() {
   const [procStep, setProcStep] = useState(0);
   const [seconds, setSeconds] = useState(BASE_SECONDS);
   const phaseRef = useRef<Phase>('record');
-  phaseRef.current = phase;
+
+  // Mirror the latest phase into a ref (read by the clock interval below)
+  // without touching the ref during render.
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   // Phase scheduler: record → processing (stepped) → notes → loop.
   useEffect(() => {
