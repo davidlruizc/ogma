@@ -12,8 +12,8 @@ A Tauri 2 desktop app (Rust backend + Vite/TypeScript UI) that records in-person
 
 Phases 1–3 implemented (Windows desktop) and **verified end-to-end against the live paid APIs** (July 2026): recording core, SQLite storage, Whisper + Claude pipeline, Notion sync, MCP server, full UI. Phase 4 in progress:
 
-- **macOS:** support code complete (IOKit wake lock in `recording/wake.rs`, mic permission in `src-tauri/Info.plist`, `Entitlements.plist`, macOS CI job + release `.dmg`) — not yet verified on real Mac hardware.
-- **iOS:** gated on the background-recording spike (`docs/ios-background-spike.md`) — needs a Mac + physical iPhone.
+- **macOS:** complete and **verified on real Mac hardware** (July 2026) — IOKit wake lock in `recording/wake.rs`, mic permission in `src-tauri/Info.plist`, `Entitlements.plist`, macOS CI job + release `.dmg`.
+- **iOS:** integrated in-repo (July 2026): `tauri-plugin-audio-recorder` vendored as a mobile-only fork in `plugins/tauri-plugin-audio-recorder/` (desktop cpal backend stripped — resolves the cpal 0.15/0.18 clash documented in `docs/ios-background-spike.md`), Xcode project committed at `src-tauri/gen/apple/` with `UIBackgroundModes: audio` + mic usage in its Info.plist, and the whole workspace compiles for `aarch64-apple-ios`. The Phase-4 go/no-go (`docs/ios-background-spike.md`) now runs in the real app via the Spike screen — still needs a physical iPhone + 60-min locked-screen test before building the iOS recording UI.
 - **Audio-file import** (WAV/M4A/MP3/FLAC/OGG → normal pipeline) implemented on desktop — the Phase 4 mobile fallback path, via the library's Import Audio button.
 
 ## Commands

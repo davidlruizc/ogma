@@ -1,0 +1,14 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Default permissions for the Audio Recorder plugin - allows all audio recording operations"
+permissions = [
+    "allow-start-recording",
+    "allow-stop-recording",
+    "allow-pause-recording",
+    "allow-resume-recording",
+    "allow-get-status",
+    "allow-get-devices",
+    "allow-check-permission",
+    "allow-request-permission",
+]

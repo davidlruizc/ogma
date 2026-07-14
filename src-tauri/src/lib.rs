@@ -626,6 +626,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_audio_recorder::init())
         .setup(|app| {
             let data_dir = data_dir_for(app.handle());
             std::fs::create_dir_all(&data_dir)?;

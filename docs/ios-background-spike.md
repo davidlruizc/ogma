@@ -17,7 +17,21 @@ Voice Memos, import the file) — worth having on desktop anyway.
 
 ---
 
-## ⚠️ Run the spike in a STANDALONE app, not the ogma workspace
+> **UPDATE (July 2026):** the standalone-app requirement below is obsolete. We
+> decided to pay the integration cost up front: the plugin is vendored in this
+> repo as a mobile-only fork (`plugins/tauri-plugin-audio-recorder/` — desktop
+> cpal backend stripped, which removes the conflict described below), the iOS
+> Xcode project is committed at `src-tauri/gen/apple/` with the two Info.plist
+> keys from step 5 already in place, and the workspace compiles for
+> `aarch64-apple-ios`. **Run the spike in the real app:** `npm run tauri ios dev`
+> with an iPhone connected, open the "Spike (iOS)" nav item, then follow steps
+> 7–8 below. The pass/fail criteria and fallback are unchanged. A bonus finding
+> from the vendored source: the plugin's Swift side *does* set
+> `AVAudioSession` `.playAndRecord` + `setActive(true)` and auto-reactivates
+> after interruptions — the step-5 caveat about a missing session category is
+> less likely to bite.
+
+## ~~⚠️ Run the spike in a STANDALONE app, not the ogma workspace~~ (obsolete, see update above)
 
 Adding `tauri-plugin-audio-recorder` to `src-tauri/` **breaks `cargo` resolution
 for the whole workspace.** Confirmed on this branch:

@@ -28,3 +28,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# tauri-plugin build script output (regenerated on every cargo build)
+plugins/*/.tauri/
