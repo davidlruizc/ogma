@@ -1,7 +1,29 @@
-import { gitConfig } from '@/lib/shared';
+import { appName, gitConfig, siteDescription, siteUrl } from '@/lib/shared';
 import { AppDemo } from './app-demo';
 
 const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
+
+// Structured data for rich results — Ogma is a free cross-platform desktop app.
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: appName,
+  applicationCategory: 'BusinessApplication',
+  operatingSystem: 'macOS, Windows',
+  description: siteDescription,
+  url: siteUrl,
+  image: `${siteUrl}/opengraph-image`,
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD',
+  },
+  author: {
+    '@type': 'Person',
+    name: 'David Ruiz',
+    url: repoUrl,
+  },
+};
 
 // Hero equalizer — matches the app's live waveform; CSS animates each bar.
 const heroBars = [12, 22, 34, 44, 30, 18, 38, 26, 42, 20, 32, 14];
@@ -64,6 +86,11 @@ const features = [
 export default function HomePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+
       {/* nav */}
       <nav className="lp-nav">
         <a href="#top" className="lp-brand" aria-label="Ogma home">

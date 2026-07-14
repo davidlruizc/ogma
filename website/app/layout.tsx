@@ -1,15 +1,66 @@
 import { RootProvider } from 'fumadocs-ui/provider/next';
 import './global.css';
 import { Inter } from 'next/font/google';
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
+import {
+  appName,
+  gitConfig,
+  siteDescription,
+  siteKeywords,
+  siteTagline,
+  siteUrl,
+} from '@/lib/shared';
+
+const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: {
-    template: '%s | Ogma',
-    default: 'Ogma — meeting recorder with AI notes',
+    template: `%s | ${appName}`,
+    default: `${appName} — meeting recorder with AI notes`,
   },
-  description:
-    'Record in-person meetings, get speaker-labeled transcripts and AI meeting notes, and have everything land in Notion — queryable by Claude via MCP.',
+  description: siteDescription,
+  applicationName: appName,
+  generator: 'Next.js',
+  keywords: siteKeywords,
+  category: 'productivity',
+  authors: [{ name: 'David Ruiz', url: repoUrl }],
+  creator: 'David Ruiz',
+  publisher: 'Ogma',
+  alternates: {
+    canonical: '/',
+  },
+  openGraph: {
+    type: 'website',
+    siteName: appName,
+    url: siteUrl,
+    title: `${appName} — ${siteTagline}`,
+    description: siteDescription,
+    locale: 'en_US',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: `${appName} — ${siteTagline}`,
+    description: siteDescription,
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+      'max-video-preview': -1,
+    },
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#0a0a0a' },
+  ],
 };
 
 const inter = Inter({
