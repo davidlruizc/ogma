@@ -19,6 +19,8 @@ ogma-core = { path = "../crates/ogma-core" }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# Ogma fork: mobile-only recording backend (see plugins/tauri-plugin-audio-recorder/README.md)
+tauri-plugin-audio-recorder = { path = "../plugins/tauri-plugin-audio-recorder" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "tauri-plugin-audio-recorder"
+version = "0.1.2"
+authors = ["Affex Team"]
+description = "Ogma fork of tauri-plugin-audio-recorder: mobile backends only (iOS/Android); the cpal 0.15 desktop backend is stripped because it conflicts with ogma-core's cpal 0.18 (alsa-sys links collision). Desktop recording lives in ogma-core."
+edition = "2021"
+rust-version = "1.77.2"
+links = "tauri-plugin-audio-recorder"
+license = "MIT"
+repository = "https://github.com/brenogonzaga/tauri-plugin-audio-recorder"
+
+[dependencies]
+tauri = { version = "2.9.5" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log = "0.4"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.2", features = ["build"] }
