@@ -1,165 +1,163 @@
-import Link from 'next/link';
 import { gitConfig } from '@/lib/shared';
+import { AppDemo } from './app-demo';
 
 const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
 
+// Hero equalizer — matches the app's live waveform; CSS animates each bar.
+const heroBars = [12, 22, 34, 44, 30, 18, 38, 26, 42, 20, 32, 14];
+
+// Platform brand marks, inlined so they need no asset requests. The Apple
+// mark (simple-icons path) inherits currentColor and serves both macOS and
+// iOS; the Microsoft mark keeps its official four brand colors.
+const AppleIcon = () => (
+  <svg viewBox="0 0 24 24" width="20" height="24" fill="currentColor" aria-hidden>
+    <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/>
+  </svg>
+);
+const MicrosoftIcon = () => (
+  <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden>
+    <rect x="0" y="0" width="11.2" height="11.2" fill="#f25022" />
+    <rect x="12.8" y="0" width="11.2" height="11.2" fill="#7fba00" />
+    <rect x="0" y="12.8" width="11.2" height="11.2" fill="#00a4ef" />
+    <rect x="12.8" y="12.8" width="11.2" height="11.2" fill="#ffb900" />
+  </svg>
+);
+
 const platforms = [
-  {
-    name: 'Windows',
-    detail: 'Windows 10 or later · .msi installer',
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="size-5" aria-hidden>
-        <path d="M3 5.4 10.3 4.4v7.1H3V5.4Zm0 13.2 7.3 1v-7H3v6Zm8.2 1.1L21 21V12.5h-9.8v8.2Zm0-16.4v8h9.8V3l-9.8 1.3Z" />
-      </svg>
-    ),
-  },
-  {
-    name: 'macOS',
-    detail: 'Apple Silicon · .dmg · experimental',
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="size-5" aria-hidden>
-        <path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.8-3.5.8-.7 0-1.9-.8-3-.8-1.6 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-1.1 2.8-2.2.9-1.3 1.2-2.5 1.3-2.6-.1 0-2.4-1-2.5-3.8ZM14.1 5.4c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-.9 2.9 1 .1 2-.5 2.7-1.3Z" />
-      </svg>
-    ),
-  },
+  { icon: <AppleIcon />, name: 'macOS' },
+  { icon: <MicrosoftIcon />, name: 'Windows' },
+  { icon: <AppleIcon />, name: 'iOS' },
 ];
 
 const features = [
   {
-    title: 'Record, crash-safe',
-    body: 'Capture 1–3 hour in-person meetings from the default mic. Audio is written as rotating 5-minute segments, so a crash loses minutes, not the meeting.',
+    tag: 'RECORD',
+    title: 'Crash-safe capture',
+    body: 'Audio is written in rotating 5-minute WAV segments, so a crash or power loss never costs you more than moments.',
   },
   {
-    title: 'Transcribe & label speakers',
-    body: 'OpenAI Whisper stitches one timestamped transcript; Claude attributes speakers and you rename them to real names.',
+    tag: 'TRANSCRIBE',
+    title: 'Transcripts with speakers',
+    body: 'Whisper stitches one timestamped transcript; Claude attributes speakers, and you rename them to real names in a click.',
   },
   {
-    title: 'AI notes, synced to Notion',
-    body: 'TL;DR, decisions, action items and quote highlights — pushed to a Notion database as the canonical, cross-device store.',
+    tag: 'SUMMARIZE',
+    title: 'Highlights & action items',
+    body: 'Every meeting is distilled into key decisions, timestamped highlights, and a clean, checkable action-item list.',
   },
   {
-    title: 'Ask Claude via MCP',
-    body: 'The same app runs as a local MCP server, so Claude can search your transcripts and pull action items on demand.',
+    tag: 'SYNC',
+    title: 'Straight to Notion',
+    body: 'Finished notes land in your Notion workspace automatically — formatted, searchable, and canonical across devices.',
+  },
+  {
+    tag: 'CONNECT',
+    title: 'MCP server built in',
+    body: 'The same app runs as a local MCP server, so Claude can search every conversation you have recorded and pull action items on demand.',
+  },
+  {
+    tag: 'PRIVATE',
+    title: 'Local-first by design',
+    body: 'Recordings, transcripts, and summaries live on your device. You decide what syncs to Notion and what stays put.',
   },
 ];
 
 export default function HomePage() {
   return (
-    <main className="flex flex-col items-center flex-1 px-4">
-      {/* Hero */}
-      <section className="flex flex-col items-center text-center pt-20 pb-14 max-w-2xl">
-        <span className="mb-5 rounded-full border px-3 py-1 text-xs font-medium text-fd-muted-foreground">
-          Alpha · Windows &amp; macOS
-        </span>
-        <h1 className="text-5xl font-bold tracking-tight mb-5">Ogma</h1>
-        <p className="text-lg text-fd-muted-foreground mb-8 leading-relaxed">
-          Record in-person meetings, get speaker-labeled transcripts and AI
-          meeting notes, and have everything land in Notion — queryable by Claude
-          via MCP.
-        </p>
-        <div className="flex flex-wrap gap-3 justify-center">
-          <Link
-            href="/docs/getting-started"
-            className="rounded-full bg-fd-primary px-6 py-2.5 font-medium text-fd-primary-foreground transition-opacity hover:opacity-90"
-          >
-            Get started
-          </Link>
-          <Link
-            href="/docs"
-            className="rounded-full border px-6 py-2.5 font-medium transition-colors hover:bg-fd-accent"
-          >
-            Read the docs
-          </Link>
+    <>
+      {/* nav */}
+      <nav className="lp-nav">
+        <a href="#top" className="lp-brand" aria-label="Ogma home">
+          <img className="lp-logo" src="/ogma-logo.png" alt="Ogma logo" />
+          <span className="lp-wordmark">ogma</span>
+        </a>
+        <span className="lp-spacer" />
+        <div className="lp-nav-links">
+          <a href="#features">FEATURES</a>
+          <a href="#download">DOWNLOAD</a>
+          <a href="/docs">DOCS</a>
+          <a href={repoUrl} target="_blank" rel="noreferrer">
+            GITHUB
+          </a>
         </div>
-      </section>
+      </nav>
 
-      {/* Downloads */}
-      <section className="w-full max-w-3xl pb-16">
-        <div className="flex items-center justify-center gap-2 mb-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-fd-muted-foreground">
-            Download
-          </h2>
+      {/* hero */}
+      <header className="lp-hero" id="top">
+        <span className="lp-eyebrow">LOCAL-FIRST MEETING RECORDER</span>
+        <h1 className="lp-title">Every meeting, remembered.</h1>
+        <p className="lp-subtitle">
+          Ogma records, transcribes, and summarizes your meetings — then syncs
+          the notes straight to Notion, and lets Claude query them over MCP.
+          Crash-safe. Private. Yours.
+        </p>
+
+        <div className="lp-wave" aria-hidden>
+          {heroBars.map((hgt, i) => (
+            <span
+              key={i}
+              style={{
+                height: `${hgt}px`,
+                animationDuration: `${1.1 + (i % 5) * 0.22}s`,
+                animationDelay: `${i * 0.09}s`,
+              }}
+            />
+          ))}
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
+
+        <div className="lp-downloads" id="download">
           {platforms.map((p) => (
-            <div
-              key={p.name}
-              className="flex items-center gap-4 rounded-xl border bg-fd-card p-4"
-            >
-              <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-fd-accent text-fd-accent-foreground">
-                {p.icon}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{p.name}</span>
-                  <span className="rounded-full bg-fd-accent px-2 py-0.5 text-[11px] font-medium text-fd-muted-foreground">
-                    Coming soon
-                  </span>
-                </div>
-                <p className="truncate text-sm text-fd-muted-foreground">
-                  {p.detail}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled
-                aria-disabled="true"
-                className="shrink-0 cursor-not-allowed rounded-full border px-4 py-2 text-sm font-medium text-fd-muted-foreground opacity-60"
-              >
-                Download
+            <div key={p.name} className="lp-dl">
+              <button type="button" className="lp-dl-btn" disabled aria-disabled>
+                <span className="lp-dl-glyph">{p.icon}</span>
+                <span className="lp-dl-meta">
+                  <span className="lp-dl-for">DOWNLOAD FOR</span>
+                  <span className="lp-dl-name">{p.name}</span>
+                </span>
               </button>
+              <span className="lp-badge-soon">COMING SOON</span>
             </div>
           ))}
         </div>
-        <p className="mt-4 text-center text-sm text-fd-muted-foreground">
-          Installers aren&apos;t published yet. Watch{' '}
-          <a
-            href={`${repoUrl}/releases`}
-            className="font-medium text-fd-foreground underline underline-offset-4"
-            target="_blank"
-            rel="noreferrer"
-          >
+
+        <p className="lp-fineprint">
+          crash-safe · rotating 5-min WAV segments · 16 kHz mono · watch{' '}
+          <a href={`${repoUrl}/releases`} target="_blank" rel="noreferrer">
             GitHub Releases
           </a>{' '}
-          for the first build.
+          for the first build
         </p>
+      </header>
+
+      {/* animated product demo */}
+      <section className="lp-shot">
+        <div className="lp-shot-glow" aria-hidden />
+        <div className="lp-shot-frame">
+          <AppDemo />
+        </div>
       </section>
 
-      {/* Features */}
-      <section className="w-full max-w-4xl border-t pt-14 pb-20">
-        <div className="grid gap-6 sm:grid-cols-2">
+      {/* features */}
+      <section className="lp-features" id="features">
+        <h2 className="lp-features-title">What it does</h2>
+        <div className="lp-feature-grid">
           {features.map((f) => (
-            <div key={f.title} className="rounded-xl border bg-fd-card p-6">
-              <h3 className="mb-2 font-semibold">{f.title}</h3>
-              <p className="text-sm leading-relaxed text-fd-muted-foreground">
-                {f.body}
-              </p>
+            <div key={f.tag} className="lp-feature">
+              <span className="lp-feature-tag">{f.tag}</span>
+              <h3 className="lp-feature-title">{f.title}</h3>
+              <p className="lp-feature-body">{f.body}</p>
             </div>
           ))}
         </div>
-        <div className="mt-12 flex flex-col items-center gap-4 text-center">
-          <p className="text-fd-muted-foreground">
-            Cloud processing runs about $1.25 per 3-hour meeting — a deliberate
-            trade so the app works the same on desktop and phone.
-          </p>
-          <div className="flex flex-wrap gap-3 justify-center">
-            <Link
-              href="/docs"
-              className="rounded-full bg-fd-primary px-6 py-2.5 font-medium text-fd-primary-foreground transition-opacity hover:opacity-90"
-            >
-              Read the docs
-            </Link>
-            <a
-              href={repoUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-full border px-6 py-2.5 font-medium transition-colors hover:bg-fd-accent"
-            >
-              View on GitHub
-            </a>
-          </div>
-        </div>
       </section>
-    </main>
+
+      {/* footer */}
+      <footer className="lp-footer">
+        <img className="lp-logo" src="/ogma-logo.png" alt="Ogma logo" />
+        <span className="lp-wordmark">ogma</span>
+        <span className="lp-spacer" />
+        <span className="lp-footer-copy">© 2026 Ogma · local-first, always</span>
+      </footer>
+    </>
   );
 }
