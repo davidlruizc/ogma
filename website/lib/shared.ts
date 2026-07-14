@@ -7,7 +7,7 @@ export const docsContentRoute = '/llms.mdx/docs';
 // URLs, robots.txt, and sitemap.xml. Override per-environment with
 // NEXT_PUBLIC_SITE_URL (e.g. a preview deploy) without touching code.
 export const siteUrl = (
-  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://omga.my'
+  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://ogma.my'
 ).replace(/\/$/, '');
 
 export const siteTagline = 'Every meeting, remembered.';
