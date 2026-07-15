@@ -3,6 +3,7 @@ name = "ogma"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Record, transcribe & note-take for in-person meetings"
 
 [lib]
