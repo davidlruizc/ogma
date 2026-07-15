@@ -26,6 +26,7 @@ Named after the Celtic god of eloquence and inventor of the Ogham script: he lis
 - [Project layout](#project-layout)
 - [Contributing](#contributing)
 - [Documentation](#documentation)
+- [License](#license)
 
 ## What it does
 
@@ -148,5 +149,9 @@ Please never hardcode or commit API keys — they live in the app's settings and
 - 🗺️ **[PLAN.md](PLAN.md)** — full architecture, decisions, phase plan, and verification checklist
 - 🛠️ **[CLAUDE.md](CLAUDE.md)** — working conventions for AI-assisted development
 - 📁 **[website/](website/)** — the docs site source (Fumadocs); `cd website && npm install && npm run dev`
+
+## License
+
+[MIT](LICENSE) © David Ruiz
 </content>
 </invoke>

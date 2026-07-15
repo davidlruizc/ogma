@@ -3,6 +3,7 @@ name = "ogma-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Ogma core: recording, storage, AI pipeline, Notion sync, MCP server"
 
 [dependencies]
