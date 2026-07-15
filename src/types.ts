@@ -97,3 +97,9 @@ export interface ProgressEvent {
   detail: string;
   error: string | null;
 }
+
+/** Result of importing one or more audio files (picker or drag-and-drop). */
+export interface ImportSummary {
+  imported: number;
+  errors: string[];
+}

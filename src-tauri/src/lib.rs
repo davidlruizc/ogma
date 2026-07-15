@@ -3,7 +3,7 @@
 #[cfg(desktop)]
 mod tray;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -317,36 +317,26 @@ async fn discard_recording(app: AppHandle, state: State<'_, AppState>) -> CmdRes
 /// Extensions offered by the import picker and accepted by the importer.
 const IMPORT_AUDIO_EXTS: [&str; 7] = ["wav", "m4a", "mp3", "flac", "ogg", "mp4", "aac"];
 
-/// Import an existing audio file (WAV/M4A/MP3/FLAC/OGG) as a new meeting:
-/// native file picker → decode → 16 kHz mono 5-min segments → normal pipeline.
-/// The picker runs Rust-side so the webview never supplies a path (a
-/// compromised webview can't feed arbitrary files to the transcribe→Notion
-/// pipeline). Returns `None` if the user cancels. The meeting row is only
-/// created after a successful decode, and every earlier failure removes the
-/// meeting dir, so a bad file leaves nothing behind.
-#[tauri::command]
-async fn import_audio_file(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    title: Option<String>,
-) -> CmdResult<Option<String>> {
-    use tauri_plugin_dialog::DialogExt;
+/// Outcome of a (possibly multi-file) import: how many meetings were created
+/// and a human-readable line per file that failed. Emitted as `import:done`
+/// for drag-and-drop (Rust-initiated) and returned directly by the picker
+/// command.
+#[derive(serde::Serialize, Clone)]
+struct ImportSummary {
+    imported: usize,
+    errors: Vec<String>,
+}
 
-    let picker_app = app.clone();
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        picker_app
-            .dialog()
-            .file()
-            .add_filter("Audio", &IMPORT_AUDIO_EXTS)
-            .blocking_pick_file()
-    })
-    .await
-    .map_err(err_str)?;
-    let Some(picked) = picked else {
-        return Ok(None); // user cancelled the picker
-    };
-    let src = picked.into_path().map_err(err_str)?;
-    // Defense in depth behind the dialog filter (e.g. a typed-in filename).
+/// Decode one already-picked audio file into a new meeting and kick off its
+/// pipeline. `src` must be an OS-provided path (native picker or OS drag-drop),
+/// never a webview-supplied string — that's the invariant that keeps a
+/// compromised webview from feeding arbitrary files to the transcribe→Notion
+/// pipeline. The meeting row is only created after a successful decode, and
+/// every earlier failure removes the meeting dir, so a bad file leaves nothing
+/// behind. Does not emit `meetings:changed` — the caller batches that.
+async fn import_one(app: &AppHandle, src: PathBuf, title: Option<String>) -> CmdResult<String> {
+    // Defense in depth behind the dialog filter / drop handler (e.g. a
+    // typed-in filename or a non-audio item in a mixed drop).
     let ext_ok = src
         .extension()
         .and_then(|e| e.to_str())
@@ -360,6 +350,7 @@ async fn import_audio_file(
     if !src.is_file() {
         return Err(format!("file not found: {}", src.display()));
     }
+    let state = app.state::<AppState>();
     let id = uuid::Uuid::new_v4().to_string();
     let dir = state.meetings_dir().join(&id);
     let now = chrono::Local::now();
@@ -410,9 +401,89 @@ async fn import_audio_file(
         return Err(err_str(e));
     }
 
-    let _ = app.emit("meetings:changed", ());
-    spawn_pipeline(&app, id.clone());
-    Ok(Some(id))
+    spawn_pipeline(app, id.clone());
+    Ok(id)
+}
+
+/// `src`'s file name for error messages, falling back to the full path.
+fn import_label(src: &Path) -> String {
+    src.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| src.display().to_string())
+}
+
+/// Import external audio files (WAV/M4A/MP3/FLAC/OGG) as new meetings via a
+/// native multi-select picker: pick → decode → 16 kHz mono 5-min segments →
+/// normal pipeline. The picker runs Rust-side so the webview never supplies a
+/// path. Each file is imported independently; one bad file doesn't abort the
+/// rest — its error comes back in the summary. Returns a zero summary if the
+/// user cancels.
+#[tauri::command]
+async fn import_audio_files(app: AppHandle) -> CmdResult<ImportSummary> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picker_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        picker_app
+            .dialog()
+            .file()
+            .add_filter("Audio", &IMPORT_AUDIO_EXTS)
+            .blocking_pick_files()
+    })
+    .await
+    .map_err(err_str)?;
+    let Some(picked) = picked else {
+        return Ok(ImportSummary { imported: 0, errors: Vec::new() }); // cancelled
+    };
+
+    let mut summary = ImportSummary { imported: 0, errors: Vec::new() };
+    for file in picked {
+        let src = match file.into_path() {
+            Ok(p) => p,
+            Err(e) => {
+                summary.errors.push(err_str(e));
+                continue;
+            }
+        };
+        match import_one(&app, src.clone(), None).await {
+            Ok(_) => summary.imported += 1,
+            Err(e) => summary.errors.push(format!("{}: {e}", import_label(&src))),
+        }
+    }
+    if summary.imported > 0 {
+        let _ = app.emit("meetings:changed", ());
+    }
+    Ok(summary)
+}
+
+/// Import audio files dropped onto the window. Paths come from the OS drag-drop
+/// event (handled in `on_window_event`), not from the webview, so the same
+/// "webview never supplies a path" invariant as the picker holds. Non-audio
+/// items in a mixed drop are ignored. Emits `import:done` with the summary so
+/// the frontend can toast the result.
+async fn import_dropped(app: AppHandle, paths: Vec<PathBuf>) {
+    let mut summary = ImportSummary { imported: 0, errors: Vec::new() };
+    for src in paths {
+        let is_audio = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| IMPORT_AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()));
+        if !is_audio {
+            continue; // silently skip non-audio items dropped alongside audio
+        }
+        match import_one(&app, src.clone(), None).await {
+            Ok(_) => summary.imported += 1,
+            Err(e) => summary.errors.push(format!("{}: {e}", import_label(&src))),
+        }
+    }
+    // Nothing droppable at all → stay silent rather than toast a no-op.
+    if summary.imported == 0 && summary.errors.is_empty() {
+        return;
+    }
+    if summary.imported > 0 {
+        let _ = app.emit("meetings:changed", ());
+    }
+    let _ = app.emit("import:done", summary);
 }
 
 /// Native folder picker (Rust-side, same rationale as the import picker) for
@@ -679,9 +750,22 @@ pub fn run() {
         // Quit lives in the tray menu.
         .on_window_event(|window, event| {
             #[cfg(desktop)]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // OS-level file drop: import any audio files off the async
+                // runtime. Paths come from the OS here, not the webview, so the
+                // picker's "webview never supplies a path" invariant holds.
+                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                    let app = window.app_handle().clone();
+                    let paths = paths.clone();
+                    tauri::async_runtime::spawn(async move {
+                        import_dropped(app, paths).await;
+                    });
+                }
+                _ => {}
             }
             #[cfg(not(desktop))]
             let _ = (window, event);
@@ -700,7 +784,7 @@ pub fn run() {
             recording_state,
             stop_recording,
             discard_recording,
-            import_audio_file,
+            import_audio_files,
             pick_folder,
             retry_pipeline,
             get_platform,

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ActionItem as _ActionItem,
   Config,
+  ImportSummary,
   Meeting,
   MeetingDetail,
   RecordingState,
@@ -35,9 +36,11 @@ export const api = {
   stopRecording: () => invoke<string>("stop_recording"),
   discardRecording: () => invoke<void>("discard_recording"),
 
-  /** Opens a native file picker (Rust-side); resolves null if cancelled. */
-  importAudioFile: (title: string | null = null) =>
-    invoke<string | null>("import_audio_file", { title }),
+  /**
+   * Opens a native multi-select file picker (Rust-side) and imports each
+   * chosen audio file as its own meeting. Resolves a zero summary if cancelled.
+   */
+  importAudioFiles: () => invoke<ImportSummary>("import_audio_files"),
 
   retryPipeline: (meetingId: string) =>
     invoke<void>("retry_pipeline", { meetingId }),
