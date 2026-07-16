@@ -772,6 +772,11 @@ pub fn run() {
             });
             #[cfg(desktop)]
             {
+                // OTA updates: check/download driven from the frontend
+                // (src/updater.ts); process plugin provides relaunch().
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
                 tray::init(app.handle())?;
                 init_global_shortcut(app.handle());
             }

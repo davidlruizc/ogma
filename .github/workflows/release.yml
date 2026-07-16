@@ -42,17 +42,29 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OTA updater artifact signing (minisign). The public key lives in
+          # tauri.conf.json; losing this private key means shipped apps can
+          # never accept another update.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: "Ogma v__VERSION__"
           releaseDraft: true
           prerelease: false
+          # latest.json points Windows updates at the NSIS installer: Tauri's
+          # NSIS installer replaces an existing MSI install cleanly, but an MSI
+          # update over an NSIS install would leave two copies behind.
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
           releaseBody: |
             ## Downloads
 
-            - **Windows**: `.msi` (recommended) or `-setup.exe`
+            - **Windows**: `-setup.exe` (recommended) or `.msi`
             - **macOS (Apple Silicon)**: `.dmg` — **experimental**, not yet tested on real hardware
+
+            Installed copies check for updates on launch and can update themselves
+            from Settings → Updates (over-the-air, signed).
 
             ## Installing unsigned builds
 
