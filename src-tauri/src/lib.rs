@@ -29,8 +29,20 @@ struct AppState {
     transition: tokio::sync::Mutex<()>,
     /// Last tray/shortcut toggle, to debounce key auto-repeat.
     last_toggle: Mutex<Option<Instant>>,
+    /// Caps how many Whisper→Claude→Notion pipelines run at once. A batch or
+    /// drag-drop import creates one meeting per file, and each pipeline buffers
+    /// a whole ~9.6MB segment per in-flight Whisper request and shares the
+    /// provider rate limits — so the fan-out is bounded instead of one live
+    /// pipeline per dropped file. Queued meetings just wait their turn; the
+    /// pipeline is resumable, so waiting costs nothing.
+    pipeline_slots: Arc<tokio::sync::Semaphore>,
     data_dir: PathBuf,
 }
+
+/// Max concurrent pipelines (see `AppState::pipeline_slots`). Small on purpose:
+/// Whisper transcribes a meeting's chunks serially anyway, so extra parallelism
+/// buys little and mostly multiplies memory and rate-limit pressure.
+const PIPELINE_CONCURRENCY: usize = 2;
 
 impl AppState {
     fn meetings_dir(&self) -> PathBuf {
@@ -337,11 +349,7 @@ struct ImportSummary {
 async fn import_one(app: &AppHandle, src: PathBuf, title: Option<String>) -> CmdResult<String> {
     // Defense in depth behind the dialog filter / drop handler (e.g. a
     // typed-in filename or a non-audio item in a mixed drop).
-    let ext_ok = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| IMPORT_AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()));
-    if !ext_ok {
+    if !is_supported_audio(&src) {
         return Err(format!(
             "unsupported file type — expected one of: {}",
             IMPORT_AUDIO_EXTS.join(", ")
@@ -412,6 +420,34 @@ fn import_label(src: &Path) -> String {
         .unwrap_or_else(|| src.display().to_string())
 }
 
+/// True if `src` has an extension the importer accepts. Extension-only by
+/// design — the decoder in `recording::import` is the real arbiter of whether
+/// the bytes are audio; this just keeps obvious non-audio out of the pipeline.
+fn is_supported_audio(src: &Path) -> bool {
+    src.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| IMPORT_AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Import each file independently, collecting per-file outcomes: one bad file
+/// never aborts the batch, and each failure contributes exactly one error line
+/// labeled with its file name. Generic over the per-file import so the
+/// partitioning logic is testable without a running Tauri app.
+async fn import_many<F, Fut>(files: Vec<PathBuf>, mut import: F) -> ImportSummary
+where
+    F: FnMut(PathBuf) -> Fut,
+    Fut: std::future::Future<Output = CmdResult<String>>,
+{
+    let mut summary = ImportSummary { imported: 0, errors: Vec::new() };
+    for src in files {
+        match import(src.clone()).await {
+            Ok(_) => summary.imported += 1,
+            Err(e) => summary.errors.push(format!("{}: {e}", import_label(&src))),
+        }
+    }
+    summary
+}
+
 /// Import external audio files (WAV/M4A/MP3/FLAC/OGG) as new meetings via a
 /// native multi-select picker: pick → decode → 16 kHz mono 5-min segments →
 /// normal pipeline. The picker runs Rust-side so the webview never supplies a
@@ -436,20 +472,19 @@ async fn import_audio_files(app: AppHandle) -> CmdResult<ImportSummary> {
         return Ok(ImportSummary { imported: 0, errors: Vec::new() }); // cancelled
     };
 
-    let mut summary = ImportSummary { imported: 0, errors: Vec::new() };
+    // A picked entry that won't resolve to a path is its own error line, and
+    // doesn't stop the rest of the batch.
+    let mut errors = Vec::new();
+    let mut paths = Vec::new();
     for file in picked {
-        let src = match file.into_path() {
-            Ok(p) => p,
-            Err(e) => {
-                summary.errors.push(err_str(e));
-                continue;
-            }
-        };
-        match import_one(&app, src.clone(), None).await {
-            Ok(_) => summary.imported += 1,
-            Err(e) => summary.errors.push(format!("{}: {e}", import_label(&src))),
+        match file.into_path() {
+            Ok(p) => paths.push(p),
+            Err(e) => errors.push(err_str(e)),
         }
     }
+
+    let mut summary = import_many(paths, |src| import_one(&app, src, None)).await;
+    summary.errors.splice(0..0, errors);
     if summary.imported > 0 {
         let _ = app.emit("meetings:changed", ());
     }
@@ -462,20 +497,9 @@ async fn import_audio_files(app: AppHandle) -> CmdResult<ImportSummary> {
 /// items in a mixed drop are ignored. Emits `import:done` with the summary so
 /// the frontend can toast the result.
 async fn import_dropped(app: AppHandle, paths: Vec<PathBuf>) {
-    let mut summary = ImportSummary { imported: 0, errors: Vec::new() };
-    for src in paths {
-        let is_audio = src
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| IMPORT_AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()));
-        if !is_audio {
-            continue; // silently skip non-audio items dropped alongside audio
-        }
-        match import_one(&app, src.clone(), None).await {
-            Ok(_) => summary.imported += 1,
-            Err(e) => summary.errors.push(format!("{}: {e}", import_label(&src))),
-        }
-    }
+    // Silently skip non-audio items dropped alongside audio.
+    let audio: Vec<PathBuf> = paths.into_iter().filter(|p| is_supported_audio(p)).collect();
+    let summary = import_many(audio, |src| import_one(&app, src, None)).await;
     // Nothing droppable at all → stay silent rather than toast a no-op.
     if summary.imported == 0 && summary.errors.is_empty() {
         return;
@@ -603,12 +627,18 @@ fn spawn_pipeline(app: &AppHandle, meeting_id: String) {
     let state = app.state::<AppState>();
     let storage = Arc::clone(&state.storage);
     let config = state.config.lock().unwrap().clone();
+    let slots = Arc::clone(&state.pipeline_slots);
     let progress_app = app.clone();
     let on_progress: ogma_core::pipeline::ProgressCallback = Arc::new(move |event: ProgressEvent| {
         let _ = progress_app.emit("meeting:progress", event.clone());
         let _ = progress_app.emit("meetings:changed", ());
     });
     tauri::async_runtime::spawn(async move {
+        // Wait for a slot before doing any provider work: a 20-file import
+        // queues here instead of opening 20 concurrent Whisper uploads.
+        let Ok(_permit) = slots.acquire_owned().await else {
+            return; // semaphore closed — app is shutting down
+        };
         let pipeline = Pipeline::new(storage, config, on_progress);
         if let Err(e) = pipeline.run(&meeting_id).await {
             tracing::error!("pipeline for {meeting_id} failed: {e}");
@@ -737,6 +767,7 @@ pub fn run() {
                 recording: Mutex::new(None),
                 transition: tokio::sync::Mutex::new(()),
                 last_toggle: Mutex::new(None),
+                pipeline_slots: Arc::new(tokio::sync::Semaphore::new(PIPELINE_CONCURRENCY)),
                 data_dir,
             });
             #[cfg(desktop)]
@@ -820,4 +851,109 @@ fn dirs_data_dir() -> Option<PathBuf> {
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
     };
     base.map(|b| b.join("com.davidruiz.ogma"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn supported_audio_accepts_known_exts_case_insensitively() {
+        assert!(is_supported_audio(Path::new("a.wav")));
+        assert!(is_supported_audio(Path::new("a.M4A")));
+        assert!(is_supported_audio(Path::new("a.Mp3")));
+        assert!(!is_supported_audio(Path::new("notes.txt")));
+        assert!(!is_supported_audio(Path::new("no_extension")));
+        // A directory dropped alongside audio has no audio extension.
+        assert!(!is_supported_audio(Path::new("some_dir")));
+        // Not fooled by an extension-looking name in a parent component.
+        assert!(!is_supported_audio(Path::new("wav/readme.md")));
+    }
+
+    #[tokio::test]
+    async fn import_many_counts_every_success() {
+        let summary =
+            import_many(paths(&["a.wav", "b.wav"]), |_| async { Ok("id".to_string()) }).await;
+        assert_eq!(summary.imported, 2);
+        assert!(summary.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn import_many_reports_every_failure_and_imports_nothing() {
+        let summary =
+            import_many(paths(&["a.wav", "b.wav"]), |_| async { Err("boom".to_string()) }).await;
+        assert_eq!(summary.imported, 0);
+        assert_eq!(summary.errors.len(), 2);
+        assert!(summary.errors.iter().all(|e| e.contains("boom")));
+    }
+
+    /// The PR's central claim: one bad file must not abort the batch.
+    #[tokio::test]
+    async fn import_many_keeps_going_past_a_bad_file() {
+        let attempted = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&attempted);
+        let summary = import_many(paths(&["good1.wav", "bad.wav", "good2.wav"]), move |src| {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.lock().unwrap().push(src.clone());
+                if src == Path::new("bad.wav") {
+                    Err("decode failed".to_string())
+                } else {
+                    Ok("id".to_string())
+                }
+            }
+        })
+        .await;
+
+        // Both good files still imported, and the bad one didn't short-circuit.
+        assert_eq!(summary.imported, 2);
+        assert_eq!(attempted.lock().unwrap().len(), 3);
+        // Exactly one error line, labeled with the offending file name.
+        assert_eq!(summary.errors, vec!["bad.wav: decode failed".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn import_many_labels_errors_by_file_name_not_full_path() {
+        let summary = import_many(paths(&["/tmp/deep/nested/take one.mp3"]), |_| async {
+            Err("unsupported".to_string())
+        })
+        .await;
+        assert_eq!(summary.errors, vec!["take one.mp3: unsupported".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn import_many_on_empty_input_is_a_silent_no_op() {
+        let summary = import_many(Vec::new(), |_| async { Ok("id".to_string()) }).await;
+        assert_eq!(summary.imported, 0);
+        assert!(summary.errors.is_empty());
+    }
+
+    /// A mixed drop: `import_dropped`'s filter keeps only audio, so non-audio
+    /// items never reach the importer and never produce an error line.
+    #[tokio::test]
+    async fn dropped_filter_passes_only_audio_to_the_importer() {
+        let dropped = paths(&["talk.wav", "notes.txt", "cover.png", "call.m4a"]);
+        let audio: Vec<PathBuf> =
+            dropped.into_iter().filter(|p| is_supported_audio(p)).collect();
+        assert_eq!(audio, paths(&["talk.wav", "call.m4a"]));
+
+        let imported = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&imported);
+        let summary = import_many(audio, move |src| {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.lock().unwrap().push(src);
+                Ok("id".to_string())
+            }
+        })
+        .await;
+
+        assert_eq!(summary.imported, 2);
+        assert!(summary.errors.is_empty());
+        assert_eq!(*imported.lock().unwrap(), paths(&["talk.wav", "call.m4a"]));
+    }
 }
