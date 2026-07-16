@@ -1291,6 +1291,37 @@ a:hover {
   transition: opacity 0.3s;
 }
 
+/* ── drag-and-drop import overlay ─────────────────────────────────────────── */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in oklab, var(--s0) 78%, transparent);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease-out;
+}
+
+.drop-overlay.visible {
+  opacity: 1;
+}
+
+.drop-overlay-card {
+  border: 2px dashed color-mix(in oklab, var(--ac) 55%, transparent);
+  border-radius: var(--radius);
+  color: var(--ac);
+  font: 600 15px var(--font-mono);
+  letter-spacing: 0.02em;
+  padding: 48px 72px;
+  background: var(--s1);
+}
+
 /* ── animations ───────────────────────────────────────────────────────────── */
 
 @keyframes pulse {

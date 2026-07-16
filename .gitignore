@@ -15,6 +15,9 @@ dist-ssr
 # Rust (workspace target lives at repo root)
 /target
 
+# Regenerable scaffold the `tauri ios` tooling drops next to a plugin
+plugins/*/.tauri/
+
 # Crash dumps
 *.stackdump
 

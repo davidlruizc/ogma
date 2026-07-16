@@ -3,7 +3,7 @@ import { armedButton, h } from "../dom";
 import { formatDuration, friendlyDate } from "../format";
 import { isProcessing, statusChip, statusDot, statusInfo } from "../status";
 import { progressByMeeting } from "../store";
-import { toast } from "../toast";
+import { toast, toastImportSummary } from "../toast";
 import type { Meeting } from "../types";
 import type { Navigate, View } from "../view";
 
@@ -27,14 +27,15 @@ export function renderLibrary(navigate: Navigate): View {
     "button",
     {
       class: "pill",
-      title: "Import an audio file (WAV, M4A, MP3, FLAC, OGG) and run the normal pipeline",
+      title:
+        "Import audio files (WAV, M4A, MP3, FLAC, OGG) — pick one or many, or drag them onto the window",
       onclick: async () => {
         try {
           importBtn.disabled = true;
           importBtn.textContent = "IMPORTING…";
-          // The file picker itself runs on the Rust side; null = cancelled.
-          const id = await api.importAudioFile();
-          if (id !== null) toast("Imported — processing…");
+          // The multi-select picker runs on the Rust side; a zero summary means
+          // the user cancelled.
+          toastImportSummary(await api.importAudioFiles());
         } catch (e) {
           toast(errorMessage(e), "error");
         } finally {

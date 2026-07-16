@@ -1,12 +1,14 @@
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
+import { toastImportSummary } from "./toast";
 import { renderDetail } from "./views/detail";
 import { renderLibrary } from "./views/library";
 import { renderRecord } from "./views/record";
 import { renderSettings } from "./views/settings";
 import { renderSpike } from "./views/spike";
 import { progressByMeeting } from "./store";
-import type { LevelUpdate, ProgressEvent } from "./types";
+import type { ImportSummary, LevelUpdate, ProgressEvent } from "./types";
 import type { Route, View } from "./view";
 
 const app = document.getElementById("app")!;
@@ -110,6 +112,24 @@ void listen<ProgressEvent>("meeting:progress", (event) => {
 });
 void listen("meetings:changed", () => {
   window.dispatchEvent(new CustomEvent("ogma:changed"));
+});
+// Rust imports dropped audio (paths come from the OS, never the webview) and
+// reports the outcome here.
+void listen<ImportSummary>("import:done", (event) => {
+  toastImportSummary(event.payload);
+});
+
+// ── drag-and-drop to import audio ─────────────────────────────────────────────
+// The actual decode/import happens Rust-side on the OS drop event; here we only
+// show a drop affordance. Not importing from JS keeps the "webview never
+// supplies a path" security invariant intact.
+const dropOverlay = document.createElement("div");
+dropOverlay.className = "drop-overlay";
+dropOverlay.innerHTML = `<div class="drop-overlay-card">Drop audio files to import</div>`;
+document.body.append(dropOverlay);
+void getCurrentWebview().onDragDropEvent((event) => {
+  const t = event.payload.type;
+  dropOverlay.classList.toggle("visible", t === "enter" || t === "over");
 });
 
 window.addEventListener("ogma:changed", () => void refreshBadges());
