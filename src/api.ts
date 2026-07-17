@@ -33,6 +33,16 @@ export const api = {
   resumeRecording: () => invoke<void>("resume_recording"),
   listInputDevices: () => invoke<string[]>("list_input_devices"),
   recordingState: () => invoke<RecordingState>("recording_state"),
+
+  /**
+   * Atomically refuse-if-recording and latch the "installing" flag so no
+   * recording can start while the OTA installer downloads and relaunches.
+   * Rejects (with a message) when a recording is already in progress.
+   */
+  beginUpdateInstall: () => invoke<void>("begin_update_install"),
+  /** Clear the "installing" flag when an install fails to complete. */
+  cancelUpdateInstall: () => invoke<void>("cancel_update_install"),
+
   stopRecording: () => invoke<string>("stop_recording"),
   discardRecording: () => invoke<void>("discard_recording"),
 

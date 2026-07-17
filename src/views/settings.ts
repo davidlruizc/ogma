@@ -276,15 +276,16 @@ export function renderSettings(_navigate: Navigate): View {
 
     installUpdateBtn.addEventListener("click", async () => {
       if (!pendingUpdate) return;
-      // A restart mid-recording would lose the active segment — refuse.
+      // A restart mid-recording would lose the active segment. Commit to the
+      // install on the backend: it atomically refuses if a recording is active
+      // and otherwise latches a flag that blocks any recording from starting
+      // (global shortcut / tray included) for the whole download→relaunch
+      // window — closing the TOCTOU gap a one-shot state read would leave open.
       try {
-        const state = await api.recordingState();
-        if (state.meeting_id !== null) {
-          toast("A recording is in progress — stop it before installing the update", "error");
-          return;
-        }
-      } catch {
-        /* backend unreachable — let the install proceed */
+        await api.beginUpdateInstall();
+      } catch (e) {
+        toast(errorMessage(e), "error");
+        return;
       }
       installUpdateBtn.disabled = true;
       checkUpdateBtn.disabled = true;
@@ -295,6 +296,8 @@ export function renderSettings(_navigate: Navigate): View {
         });
         updateStatus.textContent = "Update installed — restarting…";
       } catch (e) {
+        // Install failed — release the recording lock so the app stays usable.
+        await api.cancelUpdateInstall().catch(() => {});
         toast(errorMessage(e), "error");
         updateStatus.textContent = `Update failed: ${errorMessage(e)}`;
         installUpdateBtn.disabled = false;
