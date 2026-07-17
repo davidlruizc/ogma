@@ -1,7 +1,9 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { api, errorMessage } from "../api";
 import { h } from "../dom";
 import { toast } from "../toast";
 import type { Config } from "../types";
+import { checkForUpdate, installUpdate, type Update } from "../updater";
 import type { Navigate, View } from "../view";
 
 /** Pull a 32-hex Notion id out of a pasted URL or raw id. */
@@ -240,6 +242,69 @@ export function renderSettings(_navigate: Navigate): View {
       }
     });
 
+    // ── OTA updates ─────────────────────────────────────────────────────────
+    let appVersion = "";
+    try {
+      appVersion = await getVersion();
+    } catch {
+      appVersion = "";
+    }
+
+    let pendingUpdate: Update | null = null;
+    const updateStatus = h("span", { class: "field-hint" }, "Checked automatically on startup · installed only when you say so.");
+    const checkUpdateBtn = h("button", { class: "pill" }, "CHECK FOR UPDATES");
+    const installUpdateBtn = h("button", { class: "pill pill-accent" }, "INSTALL & RESTART");
+    installUpdateBtn.style.display = "none";
+
+    checkUpdateBtn.addEventListener("click", async () => {
+      checkUpdateBtn.disabled = true;
+      updateStatus.textContent = "Checking…";
+      try {
+        pendingUpdate = await checkForUpdate();
+        if (pendingUpdate) {
+          updateStatus.textContent = `Ogma ${pendingUpdate.version} is available (you have ${appVersion}).`;
+          installUpdateBtn.style.display = "";
+        } else {
+          updateStatus.textContent = `You're on the latest version (${appVersion}).`;
+        }
+      } catch (e) {
+        updateStatus.textContent = `Could not check for updates: ${errorMessage(e)}`;
+      } finally {
+        checkUpdateBtn.disabled = false;
+      }
+    });
+
+    installUpdateBtn.addEventListener("click", async () => {
+      if (!pendingUpdate) return;
+      // A restart mid-recording would lose the active segment. Commit to the
+      // install on the backend: it atomically refuses if a recording is active
+      // and otherwise latches a flag that blocks any recording from starting
+      // (global shortcut / tray included) for the whole download→relaunch
+      // window — closing the TOCTOU gap a one-shot state read would leave open.
+      try {
+        await api.beginUpdateInstall();
+      } catch (e) {
+        toast(errorMessage(e), "error");
+        return;
+      }
+      installUpdateBtn.disabled = true;
+      checkUpdateBtn.disabled = true;
+      try {
+        await installUpdate(pendingUpdate, ({ downloaded, total }) => {
+          const pct = total ? ` ${Math.round((downloaded / total) * 100)}%` : "";
+          updateStatus.textContent = `Downloading${pct}…`;
+        });
+        updateStatus.textContent = "Update installed — restarting…";
+      } catch (e) {
+        // Install failed — release the recording lock so the app stays usable.
+        await api.cancelUpdateInstall().catch(() => {});
+        toast(errorMessage(e), "error");
+        updateStatus.textContent = `Update failed: ${errorMessage(e)}`;
+        installUpdateBtn.disabled = false;
+        checkUpdateBtn.disabled = false;
+      }
+    });
+
     const notionConnected = config.notion_api_key.trim() !== "" && config.notion_database_id.trim() !== "";
 
     el.replaceChildren(
@@ -342,6 +407,15 @@ export function renderSettings(_navigate: Navigate): View {
           { class: "field-hint" },
           "4 tools · list_meetings · search_transcript · get_meeting_notes · get_action_items",
         ),
+      ),
+
+      // updates
+      h(
+        "div",
+        { class: "card settings-card" },
+        h("div", { class: "section-label" }, `UPDATES — Ogma ${appVersion || "?"}`),
+        h("div", { class: "field-row" }, checkUpdateBtn, installUpdateBtn),
+        updateStatus,
       ),
 
       h("div", { class: "settings-actions" }, saveBtn),

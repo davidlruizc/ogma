@@ -4,6 +4,7 @@
 mod tray;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,6 +37,11 @@ struct AppState {
     /// pipeline per dropped file. Queued meetings just wait their turn; the
     /// pipeline is resumable, so waiting costs nothing.
     pipeline_slots: Arc<tokio::sync::Semaphore>,
+    /// Set once an OTA update install is committed (download → relaunch). While
+    /// set, `start_recording_locked` refuses to start a new recording, so the
+    /// installer's relaunch can't kill an active segment. Toggled and read only
+    /// under `transition`, so it stays atomic against recording-start.
+    install_committed: AtomicBool,
     data_dir: PathBuf,
 }
 
@@ -156,6 +162,12 @@ async fn do_start_recording(app: &AppHandle, title: Option<String>) -> CmdResult
 /// Body of a start transition; callers must hold `AppState::transition`.
 fn start_recording_locked(app: &AppHandle, title: Option<String>) -> CmdResult<Meeting> {
     let state = app.state::<AppState>();
+    // Refuse to start once an OTA install is committed — the pending relaunch
+    // would kill the segment we're about to open. Read under `transition`
+    // (held by every caller), so it can't race `begin_update_install`.
+    if state.install_committed.load(Ordering::SeqCst) {
+        return Err("an update is being installed — recording is unavailable until restart".into());
+    }
     let mut active = state.recording.lock().unwrap();
     if active.is_some() {
         return Err("a recording is already in progress".into());
@@ -247,6 +259,28 @@ fn recording_state(state: State<AppState>) -> CmdResult<RecordingState> {
             paused: false,
         },
     })
+}
+
+/// Commit to installing an OTA update: refuse if a recording is active, else
+/// latch `install_committed` so no recording can start while the installer
+/// downloads and relaunches. Runs under `transition` so the check-and-latch is
+/// atomic against `start_recording_locked` (the toggle/tray/shortcut paths).
+#[tauri::command]
+async fn begin_update_install(app: AppHandle) -> CmdResult<()> {
+    let state = app.state::<AppState>();
+    let _transition = state.transition.lock().await;
+    if state.recording.lock().unwrap().is_some() {
+        return Err("a recording is in progress — stop it before installing the update".into());
+    }
+    state.install_committed.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Undo `begin_update_install` when the install fails to complete, so recording
+/// becomes available again without restarting the app.
+#[tauri::command]
+fn cancel_update_install(state: State<AppState>) {
+    state.install_committed.store(false, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -768,10 +802,16 @@ pub fn run() {
                 transition: tokio::sync::Mutex::new(()),
                 last_toggle: Mutex::new(None),
                 pipeline_slots: Arc::new(tokio::sync::Semaphore::new(PIPELINE_CONCURRENCY)),
+                install_committed: AtomicBool::new(false),
                 data_dir,
             });
             #[cfg(desktop)]
             {
+                // OTA updates: check/download driven from the frontend
+                // (src/updater.ts); process plugin provides relaunch().
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
                 tray::init(app.handle())?;
                 init_global_shortcut(app.handle());
             }
@@ -813,6 +853,8 @@ pub fn run() {
             resume_recording,
             list_input_devices,
             recording_state,
+            begin_update_install,
+            cancel_update_install,
             stop_recording,
             discard_recording,
             import_audio_files,

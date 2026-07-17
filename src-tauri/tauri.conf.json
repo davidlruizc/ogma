@@ -31,6 +31,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -40,6 +41,14 @@
     ],
     "macOS": {
       "entitlements": "Entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEExRDI0OTQwOTgwN0I1N0EKUldSNnRRZVlRRW5Tb1MvWVFVa3BvbWE2UzZtQ3pwQ0xadnNIVW5FRWNQc3dsLzR2UnVadDFZc28K",
+      "endpoints": [
+        "https://github.com/davidlruizc/ogma/releases/latest/download/latest.json"
+      ]
     }
   }
 }

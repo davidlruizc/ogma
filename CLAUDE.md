@@ -25,6 +25,7 @@ Phases 1–3 implemented (Windows desktop) and **verified end-to-end against the
 - `npm run tauri build` — release bundle
 - MCP smoke test: pipe JSON-RPC lines into `target/debug/ogma.exe --mcp`
 - Releases: push a `v*` tag → `.github/workflows/release.yml` builds Windows + macOS (arm64) installers into a draft GitHub Release. Version bump touches `package.json`, workspace `Cargo.toml`, and `src-tauri/tauri.conf.json` — see `docs/RELEASING.md`.
+- OTA updates: installed apps self-update via `tauri-plugin-updater` (signed artifacts + `latest.json` from `tauri-action`; updates go live when the draft release is **published**). Signing key + endpoint details in `docs/RELEASING.md`; frontend flow in `src/updater.ts` + Settings.
 
 ## Layout
 

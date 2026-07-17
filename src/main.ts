@@ -1,7 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
-import { toastImportSummary } from "./toast";
+import { toast, toastImportSummary } from "./toast";
+import { checkForUpdate } from "./updater";
 import { renderDetail } from "./views/detail";
 import { renderLibrary } from "./views/library";
 import { renderRecord } from "./views/record";
@@ -139,5 +140,17 @@ window.setInterval(() => void refreshBadges(), 2500);
 
 void refreshBadges();
 void refreshNotionStatus();
+
+// ── OTA update check on startup ─────────────────────────────────────────────
+// Silent: only speaks up when a newer release exists. Install stays a
+// deliberate action in Settings so a restart never interrupts a recording.
+void (async () => {
+  try {
+    const update = await checkForUpdate();
+    if (update) toast(`Ogma ${update.version} is available — install it from Settings`);
+  } catch {
+    /* offline, dev build, or no published release yet — stay quiet */
+  }
+})();
 
 navigate({ name: "record" });
