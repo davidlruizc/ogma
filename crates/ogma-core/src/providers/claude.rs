@@ -5,8 +5,11 @@
 //! drift, Claude does NOT re-emit the transcript: the prompt numbers each
 //! utterance and the response assigns speakers as index ranges
 //! (`[{start_index, end_index, speaker}]`), which we merge with the stored
-//! Whisper utterances locally. Output stays a few thousand tokens even for
-//! a 3-hour meeting, so a plain (non-streaming) request is safe.
+//! Whisper utterances locally. The notes themselves stay a few thousand
+//! tokens, but `speaker_assignments` scales with speaker *turns* — a long
+//! meeting with fragmented back-and-forth can emit hundreds of ranges at
+//! ~25 tokens each, which is what dominates `MAX_TOKENS`. Still a plain
+//! (non-streaming) request: the client timeout below covers it.
 //!
 //! Structured JSON is enforced with `output_config.format` (json_schema).
 
@@ -19,7 +22,7 @@ use crate::providers::{with_retries, NotesProvider, NotesResult, Utterance};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const MAX_TOKENS: u32 = 16_000;
+const MAX_TOKENS: u32 = 64_000;
 
 pub struct ClaudeProvider {
     client: reqwest::Client,
